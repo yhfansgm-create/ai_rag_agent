@@ -1,0 +1,31 @@
+# 入库清单（用于 Word/PDF 等无法内嵌 front-matter 的文档）
+# 每个条目 = file(相对 rag.kb.dir 的路径) + 文档元数据，字段含义见 docs/RAG知识库文档模板.md
+documents:
+  - file: 柜面存取款操作手册.md
+    kb_id: kb-teller
+    doc_id: DOC-TELLER-001
+    title: 柜面存取款操作手册
+    doc_type: manual
+    doc_level: 2
+    org_codes: ["0100/0101", "0100/0103"]
+    owner: 张三-运营部
+    source: 运营部制度库
+    effective_from: "2024-01-01"
+    effective_until: null
+    version: "1.2"
+    is_code: false
+
+  # 示例：生产系统的 docx/pdf 这样配（file 指向真实文件）
+  # - file: ops/生产系统变更管理规范.docx
+  #   kb_id: kb-ops
+  #   doc_id: OPS-MANUAL-2024-007
+  #   title: 生产系统变更管理规范
+  #   doc_type: manual
+  #   doc_level: 3
+  #   org_codes: ["0100/0100"]
+  #   owner: 李四-总行运维中心
+  #   source: 运维中心制度库
+  #   effective_from: "2024-03-01"
+  #   effective_until: null
+  #   version: "1.2"
+  #   is_code: false

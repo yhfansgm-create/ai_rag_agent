@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="JavaScriptLibraryMappings">
+    <excludedPredefinedLibrary name="fan-ai-agent/pf-link/WindowsApps/Claude_1.24012.11.0_x64__pzs8sxrjxfjjc/app/resources/app.asar.unpacked/node_modules" />
+    <excludedPredefinedLibrary name="fan-ai-agent/pf-link/WindowsApps/Claude_1.25927.0.0_x64__pzs8sxrjxfjjc/app/resources/app.asar.unpacked/node_modules" />
+    <excludedPredefinedLibrary name="fan-ai-agent/pf-link/WindowsApps/Microsoft.GamingApp_2608.1001.17.0_x64__8wekyb3d8bbwe/Bundle/assets/node_modules" />
+    <excludedPredefinedLibrary name="fan-ai-agent/pf-link/nodejs/node_modules" />
+  </component>
+</project>

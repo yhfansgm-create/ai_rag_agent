@@ -1,0 +1,22 @@
+# 本地开发数据源 —— 会话表在 MySQL(fan_ai_agent)。
+# 注意：password 含本地默认值，仅供 local profile 开发使用；生产必须用环境变量注入，勿提交明文。
+spring:
+  datasource:
+    url: "jdbc:mysql://127.0.0.1:3306/fan_ai_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true"
+    username: root
+    password: "${MYSQL_PASSWORD:!QAZ2wsx}"
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+# RAG 知识库配置
+rag:
+  kb:
+    dir: ./kb                # 入库扫描目录
+  retrieval:
+    top-k: 5                 # 每次检索取回条数
+  vectorstore:
+    enabled: false           # 开启后需要: PG 数据源 + embedding 模型(行内闭环)
+    dimensions: 1536
+    datasource:
+      url: "jdbc:postgresql://127.0.0.1:5432/pgvector_db"
+      username: postgres
+      password: "${PG_PASSWORD:}"

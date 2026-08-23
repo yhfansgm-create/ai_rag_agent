@@ -144,6 +144,7 @@ public class SessionAuthService {
             throw new SessionAuthException(SessionAuthException.Code.UNAUTHORIZED, "用户无任何可检索知识库，拒绝访问");
         }
         String kb = String.join("', '", p.kbIds());
+        // 注意：不过滤 is_code —— 代码 chunk 需可被检索到，RetrievalAdvisor 才会对密级不足者脱敏/丢弃
         return "kb_id in ['" + kb + "'] && doc_level <= " + p.dataClearanceLevel()
                 + " && org_codes in ['" + p.orgPath() + "']";
     }

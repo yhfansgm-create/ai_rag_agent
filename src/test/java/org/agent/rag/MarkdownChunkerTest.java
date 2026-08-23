@@ -33,4 +33,24 @@ class MarkdownChunkerTest {
         assertThat(chunks).hasSize(1);
         assertThat(chunks.get(0).section()).isEqualTo("概述");
     }
+
+    @Test
+    @DisplayName("含围栏代码块的 chunk 标记 containsCode=true")
+    void marksChunksContainingFencedCode() {
+        String body = "# 一、范围\n普通正文\n# 二、实现\n```java\npublic void verify(){}\n```\n验证逻辑\n";
+
+        var chunks = new MarkdownChunker().chunk(body);
+
+        assertThat(chunks).hasSize(2);
+        assertThat(chunks.get(0).containsCode()).isFalse();
+        assertThat(chunks.get(1).containsCode()).isTrue();
+    }
+
+    @Test
+    @DisplayName("整篇不含代码 → 所有 chunk containsCode=false")
+    void plainTextNeverCode() {
+        var chunks = new MarkdownChunker().chunk("# 标题\n只有文字的正文，无代码。");
+        assertThat(chunks).hasSize(1);
+        assertThat(chunks.get(0).containsCode()).isFalse();
+    }
 }

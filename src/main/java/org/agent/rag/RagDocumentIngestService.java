@@ -100,7 +100,8 @@ public class RagDocumentIngestService {
             Path docPath = Path.of(kbDir).resolve(e.file());
             String content = Files.readString(docPath);
             // 非 markdown（docx/pdf）暂时整篇一段；生产用对应解析器切分
-            MarkdownChunker.Chunk chunk = new MarkdownChunker.Chunk(e.metadata().title(), content);
+            MarkdownChunker.Chunk chunk = new MarkdownChunker.Chunk(
+                    e.metadata().title(), content, MarkdownChunker.containsFencedCode(content));
             List<Document> docs = List.of(toDocument(e.metadata(), chunk, 0));
             store.add(docs);
             total += docs.size();
@@ -117,10 +118,11 @@ public class RagDocumentIngestService {
         metadata.put("org_codes", meta.orgCodes());
         metadata.put("section", chunk.section());
         metadata.put("chunk_no", chunkNo);
+        // 代码标签按 chunk 计算：文档级声明为代码，或本 chunk 实际含围栏代码块
+        metadata.put("is_code", meta.isCode() || chunk.containsCode());
         putIfNotNull(metadata, "doc_id", meta.docId());
         putIfNotNull(metadata, "doc_version", meta.version());
         putIfNotNull(metadata, "doc_type", meta.docType());
-        putIfNotNull(metadata, "is_code", meta.isCode());
         putIfNotNull(metadata, "source", meta.source());
         String id = (meta.docId() == null ? "?" : meta.docId())
                 + "@" + (meta.version() == null ? "?" : meta.version())

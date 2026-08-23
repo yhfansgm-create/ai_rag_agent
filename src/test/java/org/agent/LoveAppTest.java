@@ -4,11 +4,17 @@ import jakarta.annotation.Resource;
 import org.agent.App.LoveApp;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.boot.test.context.SpringBootTest;
 
 import java.util.UUID;
 
+/**
+ * 真实 LLM 冒烟测试：需要配置 DEEPSEEK_API_KEY 环境变量（走网络），
+ * 未配置时跳过，避免标准单测套件依赖外部密钥/网络。
+ */
 @SpringBootTest
+@EnabledIfEnvironmentVariable(named = "DEEPSEEK_API_KEY", matches = ".+")
 public class LoveAppTest {
     @Resource
     private LoveApp loveApp;

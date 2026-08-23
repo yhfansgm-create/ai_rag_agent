@@ -74,8 +74,53 @@ class RagDocumentIngestServiceTest {
                 assertThat(d.getMetadata().get("doc_level")).isEqualTo(2);
                 assertThat((List<String>) d.getMetadata().get("org_codes")).contains("0100/0101");
                 assertThat(d.getMetadata()).containsKey("section").containsKey("chunk_no");
+                assertThat(d.getMetadata().get("is_code")).isEqualTo(false); // 纯文本文档 → 非代码
             }
             assertThat(docs.get(0).getMetadata().get("section")).isEqualTo("一、存取款");
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    @DisplayName("含围栏代码块的 chunk → 该 chunk is_code=true（权限判定下沉到 chunk 级）")
+    void codeFenceTagsChunkIsCodeTrue() throws Exception {
+        String codeDoc = """
+                ---
+                kb_id: kb-teller
+                doc_id: DOC-TEST-002
+                title: 带代码的需求文档
+                doc_type: manual
+                doc_level: 2
+                org_codes:
+                  - "0100/0101"
+                version: "1.0"
+                is_code: false
+                ---
+                # 一、需求描述
+                纯文字需求。
+                # 二、实现验证
+                正确性验证代码如下：
+                ```java
+                String secret = "S3CRET";
+                ```
+                验证结论。
+                """;
+        Path file = Files.createTempFile("code", ".md");
+        Files.writeString(file, codeDoc);
+        try {
+            service().ingestFile(file);
+
+            ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+            verify(vectorStore).add(captor.capture());
+            List<Document> docs = captor.getValue();
+
+            assertThat(docs).hasSize(2);
+            // 纯文字 chunk：非代码
+            assertThat(docs.get(0).getMetadata().get("is_code")).isEqualTo(false);
+            // 含围栏代码块的 chunk：is_code=true，doc_level 保持文档级(2)，不提升（供检索侧脱敏）
+            assertThat(docs.get(1).getMetadata().get("is_code")).isEqualTo(true);
+            assertThat(docs.get(1).getMetadata().get("doc_level")).isEqualTo(2);
         } finally {
             Files.deleteIfExists(file);
         }

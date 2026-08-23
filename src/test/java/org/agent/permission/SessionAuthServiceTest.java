@@ -64,7 +64,7 @@ class SessionAuthServiceTest {
         assertThat(resp.sessionId()).isNotBlank();
         assertThat(resp.sessionToken()).isNotBlank();
         assertThat(resp.expiresAt()).isNotNull();
-        assertThat(resp.accessFilter()).contains("kb-teller").contains("doc_level <= 2");
+        assertThat(resp.accessFilter()).contains("kb-teller").contains("doc_level <= 2").doesNotContain("is_code");
         verify(sessionDao).insert(any(SessionRow.class));
     }
 

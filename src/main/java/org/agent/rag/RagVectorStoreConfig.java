@@ -1,6 +1,10 @@
 package org.agent.rag;
 
+import org.springframework.ai.document.MetadataMode;
 import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingModel;
+import org.springframework.ai.openai.OpenAiEmbeddingOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
 import org.springframework.beans.factory.annotation.Value;
@@ -13,13 +17,16 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import javax.sql.DataSource;
 
 /**
- * PGVector 向量库配置 —— 默认关闭，打开 rag.vectorstore.enabled=true 时激活。
+ * RAG 后端配置 —— 默认关闭，打开 rag.vectorstore.enabled=true 时激活。
  * <p>
  * 注意：
  * <ul>
  *   <li>PG 是独立于 MySQL 会话库的第二个数据源（vectorstore.datasource.*）</li>
- *   <li>需要先有一个 EmbeddingModel bean（如 Ollama / OpenAI 兼容 embedding，行内闭环）</li>
- *   <li>embedding 模型必须行内部署，不调外部 API（文本向量里编码的是文档原文）</li>
+ *   <li>embedding 走阿里云百炼 DashScope 的 OpenAI 兼容接口（text-embedding-v3），
+ *       与 DeepSeek chat 共用 spring-ai-openai starter，但用独立的 rag.embedding.* 配置。
+ *       自定义 EmbeddingModel bean 后，Spring AI 的 OpenAI embedding 自动配置会因
+ *       @ConditionalOnMissingBean 自动退让，不会误指向 DeepSeek 的 embedding 端点（DeepSeek 无此接口）</li>
+ *   <li>生产环境建议替换为行内部署的 embedding（如 Ollama），避免文档原文出外网（向量编码的是原文）</li>
  * </ul>
  */
 @Configuration
@@ -33,9 +40,38 @@ public class RagVectorStoreConfig {
         return DataSourceBuilder.create().url(url).username(username).password(password).build();
     }
 
+    /**
+     * 阿里云百炼 Qwen embedding（DashScope OpenAI 兼容模式）。
+     * <p>
+     * 与 DeepSeek chat 分离：chat 走 spring.ai.openai.*（base-url=deepseek.com），
+     * 这里用独立的 rag.embedding.* 指向 DashScope，两个模型互不干扰。
+     * api-key 缺失直接启动失败（fail-fast，避免运行期 401 难以排查）。
+     */
+    @Bean
+    public EmbeddingModel ragEmbeddingModel(
+            @Value("${rag.embedding.base-url:https://dashscope.aliyuncs.com/compatible-mode/v1}") String baseUrl,
+            @Value("${rag.embedding.api-key:}") String apiKey,
+            @Value("${rag.embedding.model:text-embedding-v3}") String model,
+            @Value("${rag.embedding.dimensions:1024}") int dimensions) {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("未配置 rag.embedding.api-key（阿里云百炼 DASHSCOPE_API_KEY），"
+                    + "请用环境变量注入后再开启 rag.vectorstore.enabled");
+        }
+        OpenAiApi api = OpenAiApi.builder()
+                .baseUrl(baseUrl)
+                .apiKey(apiKey)
+                .build();
+        OpenAiEmbeddingOptions options = OpenAiEmbeddingOptions.builder()
+                .model(model)
+                .dimensions(dimensions)
+                .build();
+        // MetadataMode.EMBED 与 Spring AI 自动配置默认一致
+        return new OpenAiEmbeddingModel(api, MetadataMode.EMBED, options);
+    }
+
     @Bean
     public VectorStore ragVectorStore(EmbeddingModel embeddingModel,
-                                      @Value("${rag.vectorstore.dimensions:1536}") int dimensions,
+                                      @Value("${rag.embedding.dimensions:1024}") int dimensions,
                                       DataSource ragVectorDataSource) {
         // 表名默认 vector_store，可另用 schemaName/tableName 定制（当前版本 builder 未暴露 tableName）
         return PgVectorStore.builder(new JdbcTemplate(ragVectorDataSource), embeddingModel)

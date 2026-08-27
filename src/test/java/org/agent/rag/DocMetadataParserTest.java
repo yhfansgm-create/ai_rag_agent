@@ -44,6 +44,26 @@ class DocMetadataParserTest {
     }
 
     @Test
+    @DisplayName("未声明 is_code → isCode()=null（由入库侧 CodeSniffer 决定）")
+    void absentIsCodeIsNull() {
+        String noFlag = """
+                ---
+                kb_id: kb-teller
+                doc_id: DOC-002
+                title: 无代码声明文档
+                doc_type: manual
+                doc_level: 2
+                org_codes:
+                  - "0100/0101"
+                ---
+                # 一、正文
+                正文……
+                """;
+        DocMetadata m = new DocMetadataParser().parse(noFlag);
+        assertThat(m.isCode()).isNull();
+    }
+
+    @Test
     @DisplayName("去掉 front-matter 返回正文")
     void stripsFrontMatter() {
         String body = DocMetadataParser.stripFrontMatter(SAMPLE);

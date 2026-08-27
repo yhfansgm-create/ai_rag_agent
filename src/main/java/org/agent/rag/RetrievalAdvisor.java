@@ -130,7 +130,7 @@ public class RetrievalAdvisor implements CallAdvisor, StreamAdvisor {
      * <p>
      * 密级 ≥ 5 → 原文放行（可看代码）；密级 &lt; 5 → 对代码块脱敏：
      * <ul>
-     *   <li>已标记 is_code 但脱敏器未定位到代码 → 无法确认已清干净，整块丢弃（宁缺毋滥）</li>
+     *   <li>已标记 is_code 但脱敏器未定位到代码（裸代码/声明为代码却无内容）→ 无法确认已清干净，整块丢弃（宁缺毋滥）</li>
      *   <li>脱敏后仍有代码残留 → 整块丢弃（fail-closed）</li>
      *   <li>脱敏成功 → 保留脱敏后的 chunk（正文 + 代码占位符）</li>
      * </ul>

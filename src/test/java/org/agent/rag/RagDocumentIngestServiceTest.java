@@ -35,7 +35,7 @@ class RagDocumentIngestServiceTest {
     private RagDocumentIngestService service() {
         when(provider.getIfAvailable()).thenReturn(vectorStore);
         return new RagDocumentIngestService(provider, new DocMetadataParser(),
-                new MarkdownChunker(), new IngestManifestLoader(), "./kb");
+                new MarkdownChunker(), new IngestManifestLoader(), new CodeSniffer(), "./kb");
     }
 
     private static final String VALID_DOC = """
@@ -127,6 +127,79 @@ class RagDocumentIngestServiceTest {
     }
 
     @Test
+    @DisplayName("未声明 is_code 但含裸 SQL → sniffer 打标 is_code=true（裸代码兜底）")
+    void bareSqlWithoutDeclaration_tagsChunkIsCodeTrue() throws Exception {
+        String doc = """
+                ---
+                kb_id: kb-teller
+                doc_id: DOC-TEST-003
+                title: 报表口径
+                doc_type: manual
+                doc_level: 2
+                org_codes:
+                  - "0100/0101"
+                version: "1.0"
+                ---
+                # 一、报表口径
+                客户大额存款口径如下：
+                SELECT cust_no, bal FROM t_deposit WHERE bal > 10000;
+                统计口径由运营部维护。
+                """;
+        Path file = Files.createTempFile("bare", ".md");
+        Files.writeString(file, doc);
+        try {
+            service().ingestFile(file);
+
+            ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+            verify(vectorStore).add(captor.capture());
+            List<Document> docs = captor.getValue();
+
+            assertThat(docs).hasSize(1);
+            // 未声明 is_code + 裸 SQL → document 级嗅探 + chunk 级定位命中
+            assertThat(docs.get(0).getMetadata().get("is_code")).isEqualTo(true);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
+    @DisplayName("显式 is_code=false 但含裸 SQL → 尊重作者声明不提升标签（仅 WARN）")
+    void explicitFalseSuppressesSniffer() throws Exception {
+        String doc = """
+                ---
+                kb_id: kb-teller
+                doc_id: DOC-TEST-004
+                title: 报表口径
+                doc_type: manual
+                doc_level: 2
+                org_codes:
+                  - "0100/0101"
+                version: "1.0"
+                is_code: false
+                ---
+                # 一、报表口径
+                客户大额存款口径如下：
+                SELECT cust_no, bal FROM t_deposit WHERE bal > 10000;
+                统计口径由运营部维护。
+                """;
+        Path file = Files.createTempFile("explicit", ".md");
+        Files.writeString(file, doc);
+        try {
+            service().ingestFile(file);
+
+            ArgumentCaptor<List<Document>> captor = ArgumentCaptor.forClass(List.class);
+            verify(vectorStore).add(captor.capture());
+            List<Document> docs = captor.getValue();
+
+            assertThat(docs).hasSize(1);
+            // 作者显式 is_code=false 优先：sniffer 被抑制，仅围栏检测仍生效
+            assertThat(docs.get(0).getMetadata().get("is_code")).isEqualTo(false);
+        } finally {
+            Files.deleteIfExists(file);
+        }
+    }
+
+    @Test
     @DisplayName("缺 org_codes → 拒入(fail-closed)")
     void missingOrgCodes_rejects() throws Exception {
         String bad = """
@@ -153,7 +226,7 @@ class RagDocumentIngestServiceTest {
         ObjectProvider<VectorStore> empty = mock(ObjectProvider.class);
         when(empty.getIfAvailable()).thenReturn(null);
         RagDocumentIngestService svc = new RagDocumentIngestService(empty, new DocMetadataParser(),
-                new MarkdownChunker(), new IngestManifestLoader(), "./kb");
+                new MarkdownChunker(), new IngestManifestLoader(), new CodeSniffer(), "./kb");
 
         Path file = Files.createTempFile("x", ".md");
         Files.writeString(file, VALID_DOC);

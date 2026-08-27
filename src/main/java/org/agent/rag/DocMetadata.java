@@ -26,7 +26,10 @@ public record DocMetadata(
         LocalDate effectiveFrom,
         LocalDate effectiveUntil,
         String version,
-        /** 是否代码类（商业秘密，最高一档） */
-        boolean isCode
+        /**
+         * 是否代码类（商业秘密，最高一档）。
+         * {@code null}=未声明（由入库侧 CodeSniffer 决定）；显式 true 继承到全 chunk；显式 false 尊重作者声明。
+         */
+        Boolean isCode
 ) {
 }

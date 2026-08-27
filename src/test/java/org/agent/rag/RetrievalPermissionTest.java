@@ -245,14 +245,28 @@ class RetrievalPermissionTest {
     }
 
     @Test
-    @DisplayName("原理5c：已标记含代码但脱敏器未定位到代码 → 整块丢弃（宁缺毋滥）")
+    @DisplayName("原理5c：已标记 is_code 但无围栏可脱敏 → 整块丢弃（宁缺毋滥）")
     void taggedCodeWithoutFenceIsDropped() {
         SessionEnvelope lv3 = envelope(3, "0100/0101", List.of("kb-teller"));
-        // 元数据标了 is_code=true，但文本里没有围栏代码块（可能用了表格/缩进等未覆盖格式）
+        // 声明为代码但脱敏器定位不到围栏代码块（纯文字或裸代码）：无法证明已清干净 → fail-closed 丢弃
         Document tricky = new Document("校验逻辑见下方表格。", Map.of(
                 "kb_id", "kb-teller", "doc_level", 2, "org_codes", List.of("0100/0101"), "is_code", true));
 
         List<Document> kept = runAdvisor(List.of(tricky), lv3);
+
+        assertThat(kept).isEmpty();
+    }
+
+    @Test
+    @DisplayName("原理5d：is_code=true 的裸代码 chunk（无围栏）→ 整块丢弃，正文也不给")
+    void bareCodeChunkDroppedForLowClearanceUser() {
+        SessionEnvelope lv3 = envelope(3, "0100/0101", List.of("kb-teller"));
+        // 裸 SQL 被入库 sniffer 打标 is_code=true；检索侧无围栏可脱敏 → 整块丢弃
+        Document bareCode = new Document(
+                "统计口径如下：\nSELECT cust_no, bal FROM t_deposit WHERE bal > 10000;\n口径由运营部维护。",
+                Map.of("kb_id", "kb-teller", "doc_level", 2, "org_codes", List.of("0100/0101"), "is_code", true));
+
+        List<Document> kept = runAdvisor(List.of(bareCode), lv3);
 
         assertThat(kept).isEmpty();
     }

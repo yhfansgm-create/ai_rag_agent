@@ -1,0 +1,36 @@
+# 测试用途：manifest 入库路径 + 子目录 file 路径解析 + 非 markdown 整篇一段
+# 使用方法：将本文件及 referenced/ 目录拷贝到 rag.kb.dir 下（默认 ./kb），
+#           再调用 POST /api/kb/ingest 即可验证 manifest 入库链路。
+# 注意：kb_dir 下同时存在 .md 与 manifest 时，两者都会被 ingestDir 扫描，
+#       .md 走 front-matter 解析，manifest 走本清单。
+documents:
+  # 子目录文件引用：file 相对 rag.kb.dir 解析（Path.of(kbDir).resolve(file)）
+  - file: referenced/旧版柜面存取款操作手册.md
+    kb_id: kb-teller
+    doc_id: DOC-TELLER-LEGACY-001
+    title: 旧版柜面存取款操作手册
+    doc_type: manual
+    doc_level: 2
+    org_codes: ["0100/0101", "0100/0103"]
+    owner: 张三-运营部
+    source: 运营部制度库
+    effective_from: "2020-01-01"
+    effective_until: "2023-12-31"
+    version: "0.9"
+    is_code: false
+
+  # 模拟 Word/PDF：真实场景下 docx/pdf 无法内嵌 front-matter，元数据全部放 manifest，
+  # 内容由对应解析器抽取后整篇一段入 chunk（本项目暂以纯文本模拟）。
+  # 若引用文件不存在，Files.readString 会抛 IOException，导致整个 ingestDir 中断（fail-closed）。
+  # - file: referenced/信贷审批授权管理办法.pdf
+  #   kb_id: kb-loan
+  #   doc_id: RISK-POLICY-2023-002
+  #   doc_type: policy
+  #   doc_level: 4
+  #   org_codes: ["0100/0202"]
+  #   owner: 王五-风险管理部
+  #   source: 风险管理部制度库
+  #   effective_from: "2023-06-01"
+  #   effective_until: null
+  #   version: "3.0"
+  #   is_code: false

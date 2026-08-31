@@ -1,0 +1,11 @@
+# 测试用途：manifest 条目 doc_level 越界 → 入库校验拒入（fail-closed）
+documents:
+  - file: missing-file.md
+    kb_id: kb-teller
+    doc_id: BAD-MANIFEST-001
+    title: manifest 中 doc_level 越界
+    doc_type: manual
+    doc_level: 9
+    org_codes: ["0100/0101"]
+    version: "1.0"
+    is_code: false

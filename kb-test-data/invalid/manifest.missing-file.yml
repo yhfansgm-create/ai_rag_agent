@@ -1,0 +1,11 @@
+# 测试用途：manifest 引用的文件不存在 → Files.readString 抛 IOException → 整个 ingestDir 中断
+documents:
+  - file: 不存在的文件.md
+    kb_id: kb-teller
+    doc_id: BAD-MANIFEST-002
+    title: manifest 引用不存在的文件
+    doc_type: manual
+    doc_level: 2
+    org_codes: ["0100/0101"]
+    version: "1.0"
+    is_code: false

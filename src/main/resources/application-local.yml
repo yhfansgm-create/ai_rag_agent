@@ -14,9 +14,9 @@ rag:
   retrieval:
     top-k: 5                 # 每次检索取回条数
   vectorstore:
-    enabled: false           # 开启后需要: PG 数据源 + embedding 模型(行内闭环)
-    dimensions: 1536
+    enabled: true           # 开启后需要: PG 数据源 + embedding 模型(行内闭环)
+    dimensions: 1024        # 与 DashScope text-embedding-v3 输出维度一致
     datasource:
-      url: "jdbc:postgresql://127.0.0.1:5432/pgvector_db"
-      username: postgres
-      password: "${PG_PASSWORD:}"
+      url: "jdbc:postgresql://pgm-bp1r1p7m7d9vm33mdo.rwlb.rds.aliyuncs.com:5432/postgres"
+      username: fanyh
+      password: "${PG_PASSWORD:fanyh!QAZ2wsx}"

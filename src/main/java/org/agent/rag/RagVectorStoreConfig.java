@@ -3,6 +3,7 @@ package org.agent.rag;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.pgvector.PgVectorStore;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.jdbc.DataSourceBuilder;
@@ -18,8 +19,8 @@ import javax.sql.DataSource;
  * 注意：
  * <ul>
  *   <li>PG 是独立于 MySQL 会话库的第二个数据源（vectorstore.datasource.*）</li>
- *   <li>需要先有一个 EmbeddingModel bean（如 Ollama / OpenAI 兼容 embedding，行内闭环）</li>
- *   <li>embedding 模型必须行内部署，不调外部 API（文本向量里编码的是文档原文）</li>
+ *   <li>需要先有一个 EmbeddingModel bean（此处用 OpenAI 兼容的 DashScope embedding）</li>
+ *   <li>embedding 涉及文档原文编码，生产环境须评估数据出境合规；测试环境可直接用云端 API</li>
  * </ul>
  */
 @Configuration
@@ -34,7 +35,7 @@ public class RagVectorStoreConfig {
     }
 
     @Bean
-    public VectorStore ragVectorStore(EmbeddingModel embeddingModel,
+    public VectorStore ragVectorStore(@Qualifier("openAiEmbeddingModel") EmbeddingModel embeddingModel,
                                       @Value("${rag.vectorstore.dimensions:1536}") int dimensions,
                                       DataSource ragVectorDataSource) {
         // 表名默认 vector_store，可另用 schemaName/tableName 定制（当前版本 builder 未暴露 tableName）

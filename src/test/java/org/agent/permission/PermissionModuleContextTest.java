@@ -13,8 +13,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * 集成测试：连真实 MySQL 走一遍 createSession → verifyAndLoad 往返，不调 LLM。
  * 需要本机 MySQL(127.0.0.1:3306/fan_ai_agent) 在运行。
+ * <p>
+ * 显式关闭 vectorstore：本测试只覆盖权限会话模块（MySQL），不涉及 RAG 向量库（PG）。
+ * 否则会连带加载 rag.vectorstore 的 PG 数据源，测试环境无 PG 时整组失败。
  */
-@SpringBootTest
+@SpringBootTest(properties = "rag.vectorstore.enabled=false")
 @ActiveProfiles("local")
 class PermissionModuleContextTest {
 

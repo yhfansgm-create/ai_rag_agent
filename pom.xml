@@ -12,6 +12,9 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- 本机 JDK 26 运行测试：Spring Boot 3.4.4 默认锁的 mockito 5.14.2/byte-buddy 1.15.11 无法在 Java 26 上做 inline mock，显式升到支持版本 -->
+        <mockito.version>5.23.0</mockito.version>
+        <byte-buddy.version>1.17.7</byte-buddy.version>
     </properties>
 
     <parent>
@@ -37,15 +40,10 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
-        <!-- DeepSeek 官方 OpenAI 兼容接口 -->
+        <!-- DeepSeek chat + DashScope embedding，都走 OpenAI 兼容接口 -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-openai</artifactId>
-        </dependency>
-        <!-- https://docs.spring.io/spring-ai/reference/api/chat/ollama-chat.html -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-starter-model-ollama</artifactId>
         </dependency>
         <dependency>
             <groupId>org.springframework.ai</groupId>

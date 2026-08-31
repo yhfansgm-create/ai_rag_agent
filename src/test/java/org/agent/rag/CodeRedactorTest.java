@@ -67,7 +67,7 @@ class CodeRedactorTest {
     }
 
     @Test
-    @DisplayName("未闭合围栏 → 无完整代码块匹配，原文不变")
+    @DisplayName("未闭合围栏 → 无完整代码块匹配，原文不变（由入库打标 + 检索整块丢弃兜底）")
     void unclosedFenceUnchanged() {
         String text = "```java\nString x = 1;";
 

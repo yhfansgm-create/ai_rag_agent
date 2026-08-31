@@ -1,5 +1,6 @@
 package org.agent.rag;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.beans.factory.ObjectProvider;
@@ -22,6 +23,7 @@ import java.util.Map;
  * <p>
  * VectorStore 用 ObjectProvider 注入：未配置向量库时应用照常启动，入库时报错提示。
  */
+@Slf4j
 @Service
 public class RagDocumentIngestService {
 
@@ -29,17 +31,20 @@ public class RagDocumentIngestService {
     private final DocMetadataParser metadataParser;
     private final MarkdownChunker chunker;
     private final IngestManifestLoader manifestLoader;
+    private final CodeSniffer codeSniffer;
     private final String kbDir;
 
     public RagDocumentIngestService(ObjectProvider<VectorStore> vectorStoreProvider,
                                     DocMetadataParser metadataParser,
                                     MarkdownChunker chunker,
                                     IngestManifestLoader manifestLoader,
+                                    CodeSniffer codeSniffer,
                                     @Value("${rag.kb.dir:./kb}") String kbDir) {
         this.vectorStoreProvider = vectorStoreProvider;
         this.metadataParser = metadataParser;
         this.chunker = chunker;
         this.manifestLoader = manifestLoader;
+        this.codeSniffer = codeSniffer;
         this.kbDir = kbDir;
     }
 
@@ -80,10 +85,12 @@ public class RagDocumentIngestService {
         DocMetadata meta = metadataParser.parse(content);   // 缺 front-matter 直接抛
         validate(meta);                                      // 缺关键元数据 → 拒入
         String body = DocMetadataParser.stripFrontMatter(content);
+        boolean docLooksLikeCode = codeSniffer.docLooksLikeCode(body);
+        warnIfDeclaredFalseButLooksLikeCode(file, meta, docLooksLikeCode);
         List<MarkdownChunker.Chunk> chunks = chunker.chunk(body);
         List<Document> docs = new ArrayList<>();
         for (int i = 0; i < chunks.size(); i++) {
-            docs.add(toDocument(meta, chunks.get(i), i));
+            docs.add(toDocument(meta, chunks.get(i), i, docLooksLikeCode));
         }
         store.add(docs);
         return docs.size();
@@ -99,10 +106,12 @@ public class RagDocumentIngestService {
             validate(e.metadata());
             Path docPath = Path.of(kbDir).resolve(e.file());
             String content = Files.readString(docPath);
+            boolean docLooksLikeCode = codeSniffer.docLooksLikeCode(content);
+            warnIfDeclaredFalseButLooksLikeCode(docPath, e.metadata(), docLooksLikeCode);
             // 非 markdown（docx/pdf）暂时整篇一段；生产用对应解析器切分
             MarkdownChunker.Chunk chunk = new MarkdownChunker.Chunk(
                     e.metadata().title(), content, MarkdownChunker.containsFencedCode(content));
-            List<Document> docs = List.of(toDocument(e.metadata(), chunk, 0));
+            List<Document> docs = List.of(toDocument(e.metadata(), chunk, 0, docLooksLikeCode));
             store.add(docs);
             total += docs.size();
         }
@@ -110,7 +119,7 @@ public class RagDocumentIngestService {
     }
 
     /** 每个 chunk 的向量库 metadata：文档级元数据 + 章节路径 + 序号（Document 不接受 null 值，可选字段非空才放） */
-    private Document toDocument(DocMetadata meta, MarkdownChunker.Chunk chunk, int chunkNo) {
+    private Document toDocument(DocMetadata meta, MarkdownChunker.Chunk chunk, int chunkNo, boolean docLooksLikeCode) {
         Map<String, Object> metadata = new HashMap<>();
         // 防越权三要素(必填, 校验过) + 溯源信息
         metadata.put("kb_id", meta.kbId());
@@ -118,8 +127,16 @@ public class RagDocumentIngestService {
         metadata.put("org_codes", meta.orgCodes());
         metadata.put("section", chunk.section());
         metadata.put("chunk_no", chunkNo);
-        // 代码标签按 chunk 计算：文档级声明为代码，或本 chunk 实际含围栏代码块
-        metadata.put("is_code", meta.isCode() || chunk.containsCode());
+        // 代码标签按 chunk 计算（三选一）：
+        //  ① 作者显式声明为代码 → 全 chunk 继承（true 最高优先）
+        //  ② 本 chunk 实际含 markdown 围栏代码块
+        //  ③ 作者未声明（null）且文档级嗅探疑似代码 → 本 chunk 内含疑似代码行（裸代码兜底）
+        // 显式 false：尊重作者声明，不嗅探（① 不命中，③ 也被 declared==null 挡掉），围栏 ② 仍生效
+        Boolean declared = meta.isCode();
+        boolean isCode = Boolean.TRUE.equals(declared)
+                || chunk.containsCode()
+                || (declared == null && docLooksLikeCode && codeSniffer.chunkLooksLikeCode(chunk.text()));
+        metadata.put("is_code", isCode);
         putIfNotNull(metadata, "doc_id", meta.docId());
         putIfNotNull(metadata, "doc_version", meta.version());
         putIfNotNull(metadata, "doc_type", meta.docType());
@@ -133,6 +150,15 @@ public class RagDocumentIngestService {
     private static void putIfNotNull(Map<String, Object> metadata, String key, Object value) {
         if (value != null) {
             metadata.put(key, value);
+        }
+    }
+
+    /** 作者显式 is_code=false 但正文检出疑似代码 → 尊重声明（裸代码不提升），但打 WARN 提醒复核（防漏标泄漏） */
+    private void warnIfDeclaredFalseButLooksLikeCode(Path file, DocMetadata meta, boolean docLooksLikeCode) {
+        if (meta.isCode() == Boolean.FALSE && docLooksLikeCode) {
+            log.warn("文档 {} 显式声明 is_code=false，但正文检出疑似代码信号。作者声明优先：裸代码不提升标签；"
+                    + "围栏代码块不受影响、仍会按代码脱敏。请复核声明是否准确，以防裸代码对低密级用户泄漏。",
+                    file.getFileName());
         }
     }
 

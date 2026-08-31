@@ -35,7 +35,7 @@ source: 运维中心制度库
 effective_from: 2024-03-01    # 生效日期
 effective_until: null         # null = 长期有效
 version: "1.2"                # 版本号
-is_code: false                # 是否代码类(商业秘密, 最高一档)
+is_code: false                # 代码类(商业秘密)。不写=交给入库嗅探自动判定；true=全 chunk 继承；false=尊重声明(裸代码不提升)
 ---
 
 # 一、适用范围
@@ -110,7 +110,7 @@ documents:
 | `effective_from` / `effective_until` | 政策时效（制度废改立） |
 | `source` / `owner` | 审计溯源（哪份制度、谁负责） |
 | `doc_type` | manual/policy/script/code |
-| `is_code` | 代码类=商业秘密，最高密级 + 独立分片 |
+| `is_code` | 代码类=商业秘密。缺省时入库嗅探自动按"疑似代码行"打标（兜底）；显式 true 全 chunk 继承；显式 false 尊重声明（检出信号会打 WARN 提醒复核） |
 
 ---
 

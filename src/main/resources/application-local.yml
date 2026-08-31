@@ -13,6 +13,12 @@ rag:
     dir: ./kb                # 入库扫描目录
   retrieval:
     top-k: 5                 # 每次检索取回条数
+  # embedding：阿里云百炼 DashScope OpenAI 兼容接口(与 DeepSeek chat 分离)
+  embedding:
+    model: text-embedding-v3
+    dimensions: 1024         # text-embedding-v3 支持 512/768/1024；PG 向量列维度须与此一致
+    base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api-key: ${DASHSCOPE_API_KEY:}   # 用环境变量注入,勿提交明文
   vectorstore:
     enabled: true           # 开启后需要: PG 数据源 + embedding 模型(行内闭环)
     dimensions: 1024        # 与 DashScope text-embedding-v3 输出维度一致

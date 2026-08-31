@@ -32,7 +32,7 @@ public class DocMetadataParser {
                 str(map, "kb_id"), str(map, "doc_id"), str(map, "title"), str(map, "doc_type"),
                 intOf(map, "doc_level"), strList(map, "org_codes"), str(map, "owner"), str(map, "source"),
                 dateOf(map, "effective_from"), dateOf(map, "effective_until"), str(map, "version"),
-                boolOf(map, "is_code"));
+                boolOrNull(map, "is_code"));
     }
 
     /** 提取 front-matter 的 YAML 块（不含首尾 ---）；缺块/未闭合一律抛异常（fail-closed） */
@@ -77,12 +77,16 @@ public class DocMetadataParser {
         return 0; // 缺失→0，由入库校验层拒绝
     }
 
-    private static boolean boolOf(Map<String, Object> map, String key) {
+    /** 布尔字段：键缺失 → null（表示未声明，由入库侧决定）；键存在 → 布尔值 */
+    private static Boolean boolOrNull(Map<String, Object> map, String key) {
         Object v = map.get(key);
+        if (v == null) {
+            return null;
+        }
         if (v instanceof Boolean b) {
             return b;
         }
-        return v != null && "true".equalsIgnoreCase(String.valueOf(v));
+        return "true".equalsIgnoreCase(String.valueOf(v));
     }
 
     private static LocalDate dateOf(Map<String, Object> map, String key) {

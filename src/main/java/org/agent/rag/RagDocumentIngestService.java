@@ -8,12 +8,14 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * RAG 入库管道（第 2 步）：文档 → 元数据解析 → 切分 → 元数据注入每个 chunk → 权限预检 → 写入向量库。
@@ -141,9 +143,15 @@ public class RagDocumentIngestService {
         putIfNotNull(metadata, "doc_version", meta.version());
         putIfNotNull(metadata, "doc_type", meta.docType());
         putIfNotNull(metadata, "source", meta.source());
-        String id = (meta.docId() == null ? "?" : meta.docId())
+        // PgVectorStore 的 id 列是 UUID 类型，写入时会走 UUID.fromString(document.getId())，
+        // 可读的 "docId@version#chunkNo" 不是合法 UUID，会抛 Invalid UUID string 导致整个入库失败。
+        // 用 nameUUIDFromBytes 从该 key 派生确定性 UUID：同一文档+版本+分片序号始终映射到同一 UUID，
+        // 重复入库是覆盖而非新增，保留原有的幂等语义。可读标识已由 metadata 的
+        // doc_id / doc_version / chunk_no 保留，UUID 仍可溯源。
+        String chunkKey = (meta.docId() == null ? "?" : meta.docId())
                 + "@" + (meta.version() == null ? "?" : meta.version())
                 + "#" + chunkNo;
+        String id = UUID.nameUUIDFromBytes(chunkKey.getBytes(StandardCharsets.UTF_8)).toString();
         return Document.builder().id(id).text(chunk.text()).metadata(metadata).build();
     }
 

@@ -10,7 +10,7 @@ spring:
 # RAG 知识库配置
 rag:
   kb:
-    dir: ./kb                # 入库扫描目录
+    dir: ./kb-test-data/valid # 入库扫描目录(只扫该层,不递归); 生产指向真实知识库
   retrieval:
     top-k: 5                 # 每次检索取回条数
   # embedding：硅基流动 SiliconFlow OpenAI 兼容接口（https://cloud.siliconflow.cn，BAAI/bge-m3 免费额度）
@@ -23,6 +23,6 @@ rag:
     enabled: true           # 开启后需要: PG 数据源 + embedding 模型(行内闭环)
     dimensions: 1024        # 与 embedding 输出维度一致(bge-m3=1024)
     datasource:
-      url: "jdbc:postgresql://pgm-bp1r1p7m7d9vm33mdo.rwlb.rds.aliyuncs.com:5432/postgres"
+      url: "jdbc:postgresql://pgm-bp1r1p7m7d9vm33mdo.rwlb.rds.aliyuncs.com:5432/rag_kb"
       username: fanyh_new
       password: "${PG_PASSWORD:fennu,ccyx.1001}"

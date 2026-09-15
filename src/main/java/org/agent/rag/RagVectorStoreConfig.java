@@ -78,6 +78,10 @@ public class RagVectorStoreConfig {
                 .indexType(PgVectorStore.PgIndexType.HNSW)
                 .distanceType(PgVectorStore.PgDistanceType.COSINE_DISTANCE)
                 .schemaName("public")
+                // 必须显式开启：Spring AI 1.0.0 经 builder 构建时 initializeSchema 默认为 false，
+                // 不设会导致启动日志出现 "Skipping the schema initialization for the table: public.vector_store"，
+                // 表不会被创建，后续 add/similaritySearch 全部报表不存在。
+                .initializeSchema(true)
                 .build();
     }
 }

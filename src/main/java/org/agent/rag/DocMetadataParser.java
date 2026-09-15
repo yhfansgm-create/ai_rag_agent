@@ -4,6 +4,8 @@ import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
 import java.time.LocalDate;
+import java.time.ZoneOffset;
+import java.util.Date;
 import java.util.List;
 import java.util.Map;
 
@@ -89,9 +91,22 @@ public class DocMetadataParser {
         return "true".equalsIgnoreCase(String.valueOf(v));
     }
 
+    /**
+     * 日期字段：容忍两种 YAML 写法 —— 加引号("2024-01-01")得到 String，未加引号得到 java.util.Date。
+     * <p>
+     * SnakeYAML 对未加引号的 ISO 日期会按 UTC 零点解析成 Date(如 2024-01-01 → 2024-01-01T00:00Z)，
+     * 此时 String.valueOf 会得到 "Mon Jan 01 08:00:00 CST 2024"(东八区显示)，LocalDate.parse 必然抛
+     * DateTimeParseException。故 Date 分支按 UTC 取回原日期，与 YAML 的解析口径一致。
+     */
     private static LocalDate dateOf(Map<String, Object> map, String key) {
         Object v = map.get(key);
-        return v == null ? null : LocalDate.parse(String.valueOf(v));
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Date d) {
+            return d.toInstant().atZone(ZoneOffset.UTC).toLocalDate();
+        }
+        return LocalDate.parse(String.valueOf(v));
     }
 
     private static List<String> strList(Map<String, Object> map, String key) {

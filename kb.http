@@ -1,0 +1,5 @@
+### 知识库入库：扫描 rag.kb.dir 目录并写入向量库
+POST http://localhost:8123/kb/ingest
+
+### 入库后可查 API 文档
+GET http://localhost:8123/v3/api-docs

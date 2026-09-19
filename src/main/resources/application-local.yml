@@ -1,10 +1,13 @@
 # 本地开发数据源 —— 会话表在 MySQL(fan_ai_agent)。
-# 注意：password 含本地默认值，仅供 local profile 开发使用；生产必须用环境变量注入，勿提交明文。
+# 密钥/密码一律不写在本文件：从环境变量或 config/local-secrets.yml 注入（模板见 local-secrets.example.yml）。
 spring:
+  # 机密文件已 gitignore，缺失时静默跳过（optional:），此时必须用环境变量注入。
+  config:
+    import: optional:file:./config/local-secrets.example.yml
   datasource:
     url: "jdbc:mysql://127.0.0.1:3306/fan_ai_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true"
     username: root
-    password: "${MYSQL_PASSWORD:!QAZ2wsx}"
+    password: "${MYSQL_PASSWORD}"
     driver-class-name: com.mysql.cj.jdbc.Driver
 
 # RAG 知识库配置
@@ -12,17 +15,21 @@ rag:
   kb:
     dir: ./kb-test-data/valid # 入库扫描目录(只扫该层,不递归); 生产指向真实知识库
   retrieval:
-    top-k: 5                 # 每次检索取回条数
+    top-k: 5                 # 最终注入 prompt 的条数（在两层层门禁剔除之后截断）
+    candidates-per-query: 15 # 每路查询召回条数；要比 top-k 宽，否则门禁剔完凑不满。0=按 top-k*3 自动
+    max-query-variants: 3    # 查询变体上限（原问题恒为第 1 路，其余由术语表改写而来）
+    rrf-k: 60                # RRF 平滑常数，越小则排名靠前的越占优；60 是原论文默认值
+    terms-file: classpath:kb-terms.yml  # 业务术语表：员工口语 → 制度用语
   # embedding：硅基流动 SiliconFlow OpenAI 兼容接口（https://cloud.siliconflow.cn，BAAI/bge-m3 免费额度）
   # base-url 不带 /v1：Spring AI 用默认 embeddings-path=/v1/embeddings 追加，拼成 .../v1/embeddings
   embedding:
     model: BAAI/bge-m3
     base-url: https://api.siliconflow.cn
-    api-key: ${SILICONFLOW_API_KEY:}   # 硅基流动 API Key，用环境变量注入，勿提交明文
+    api-key: ${SILICONFLOW_API_KEY}   # 硅基流动 API Key，来源见文件头
   vectorstore:
     enabled: true           # 开启后需要: PG 数据源 + embedding 模型(行内闭环)
     dimensions: 1024        # 与 embedding 输出维度一致(bge-m3=1024)
     datasource:
       url: "jdbc:postgresql://pgm-bp1r1p7m7d9vm33mdo.rwlb.rds.aliyuncs.com:5432/rag_kb"
       username: fanyh_new
-      password: "${PG_PASSWORD:fennu,ccyx.1001}"
+      password: "${PG_PASSWORD}"

@@ -10,12 +10,14 @@ spring:
 #    password: 123456
   ai:
     openai:
-      # DeepSeek 官方 API key（https://platform.deepseek.com），用环境变量注入，勿提交明文
-      api-key: ${DEEPSEEK_API_KEY:}
+      # DeepSeek 官方 API key（https://platform.deepseek.com）。
+      # 值来自环境变量，或 config/local-secrets.yml（已 gitignore，模板见 local-secrets.example.yml）。
+      # 不设默认值：宁可启动失败，也不让明文密钥落回仓库。
+      api-key: ${DEEPSEEK_API_KEY}
       base-url: https://api.deepseek.com
       chat:
         options:
-          model: deepseek-v4-flash
+          model: deepseek-flash
 # 临时注释掉，便于大家开发调试和部署（实际需要启动 MCP 服务）
 #    mcp:
 #      client:
@@ -46,7 +48,7 @@ springdoc:
   group-configs:
     - group: 'default'
       paths-to-match: '/**'
-      packages-to-scan: com.yupi.yuaiagent.controller
+      packages-to-scan: org.agent
 # knife4j config
 knife4j:
   enable: true

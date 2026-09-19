@@ -40,3 +40,7 @@ build/
 
 ### CodeGraph 本地索引 ###
 .codegraph/
+
+### 本地机密（API Key / 数据库密码）—— 两个都拦住，别提交 ###
+/config/local-secrets.yml
+/config/local-secrets.example.yml

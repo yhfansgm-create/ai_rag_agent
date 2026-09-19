@@ -9,6 +9,8 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.Map;
 
 /**
@@ -36,8 +38,21 @@ public class SessionController {
     /** 对话：走 PermissionAdvisor 三层校验，fail-closed */
     @PostMapping("/chat")
     public ChatReply chat(@RequestBody ChatRequest req) {
-        String answer = bankAssistant.chat(req.sessionId(), req.sessionToken(), req.message());
+        String answer = bankAssistant.chat(req.sessionId(), req.sessionToken(), req.message(),
+                parseBizDate(req.bizDate()));
         return new ChatReply(answer);
+    }
+
+    /** 业务日期可选；格式非法按"未指定"处理，不因一个可选出参把整次对话顶掉 */
+    private static LocalDate parseBizDate(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(raw.strip());
+        } catch (DateTimeParseException e) {
+            return null;
+        }
     }
 
     /** 关闭会话 */

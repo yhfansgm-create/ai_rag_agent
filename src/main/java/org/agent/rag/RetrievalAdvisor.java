@@ -242,8 +242,14 @@ public class RetrievalAdvisor implements CallAdvisor, StreamAdvisor {
         return rrfFusion.fuse(ranked, Document::getId);
     }
 
-    /** 业务日期：调用方可传（用于追溯"当时按哪一版制度办"），缺省今天 */
-    private static LocalDate bizDate(ChatClientRequest request) {
+    /**
+     * 业务日期：调用方可传（用于追溯"当时按哪一版制度办"），缺省今天。
+     * <p>
+     * 提到 {@code public} 是为了让 {@code org.agent.memory.TurnExtractor} 复用同一套口径 ——
+     * 记忆要把"这一轮按哪天判的时效"落库，若在那边重写一遍"未传即今天"，
+     * 两处口径就是这条链路上最容易悄悄漂移的地方。
+     */
+    public static LocalDate bizDate(ChatClientRequest request) {
         Object raw = request.context().get(PARAM_BIZ_DATE);
         if (raw == null) {
             return LocalDate.now();

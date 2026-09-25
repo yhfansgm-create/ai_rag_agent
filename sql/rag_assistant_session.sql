@@ -5,7 +5,10 @@
 -- 设计原则：只留"权限信封 + 会话生命周期"两类职责，砍掉与记忆/审计重复的字段。
 --   已移除(相对 v1)：
 --     · conversation_context_json / context_encrypted / context_message_count
---         —— 对话记忆由 Spring AI MessageWindowChatMemory 负责，会话表不存第二份上下文(避免 PII 重复落库)
+--         —— 对话记忆归 chat_message 表(L1 情景记忆, 见 sql/chat_message.sql 与
+--            《银行RAG-07-记忆分层与断点续传设计》§二 L1)，会话表不存第二份上下文(避免 PII 重复落库)。
+--            ⚠️ 这里曾经写的是"由 Spring AI MessageWindowChatMemory 负责"，但那个组件从未接入，
+--            且经 §一 论证后确定**不能用**(它是权限模型的旁路)。改掉是为了不让两份 DDL 互相打脸。
 --     · last_question / last_answer_summary / last_retrieved_docs_json /
 --       last_confidence / refusal_count / last_refusal_reason / is_masked
 --         —— "最近一次请求"粒度，归 rag_assistant_audit_log(逐请求审计表, 待建)

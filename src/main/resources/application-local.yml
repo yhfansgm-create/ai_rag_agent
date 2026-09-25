@@ -25,6 +25,15 @@ rag:
   guardrails:
     numeric:
       enabled: true   # 关掉即退回改造前行为（答案不校验直接返回），留着是为了能对比演示
+  # L1 情景记忆（MemoryAdvisor）：读最近 N 轮历史注入 prompt，轮末把"结论 + 指针"落库。
+  # 设计取舍见《银行RAG-07-记忆分层与断点续传设计》§一/§二 L1；表结构见 sql/chat_message.sql。
+  # 这里写出来是为了"看得见、改得动"—— @Value 里都带默认值，删掉整段也能跑。
+  memory:
+    enabled: true                 # 关掉即逐字节退回无记忆行为（不读库不写库），用来做对比演示
+    window-turns: 3               # 注入最近几轮（一轮 = user + assistant 两条消息）
+    max-chars-per-message: 2000   # 注入侧单条截断长度；0=不截断。仅影响 prompt，库里永远存原文
+    retention-days: 30            # 留存到期(expires_at = created_at + N 天)；0=不设过期
+    # prompt 预算上限 ≈ window-turns × 2 × max-chars-per-message = 3 × 2 × 2000 = 12000 字符
   # embedding：硅基流动 SiliconFlow OpenAI 兼容接口（https://cloud.siliconflow.cn，BAAI/bge-m3 免费额度）
   # base-url 不带 /v1：Spring AI 用默认 embeddings-path=/v1/embeddings 追加，拼成 .../v1/embeddings
   embedding:

@@ -4,10 +4,12 @@
 > 待做功能与排期依据在《银行RAG-04-待做功能优先级》，两文分开维护 ——
 > 那份文档会因为"做完一个划掉一个"而频繁变动，这份则只增不改。
 >
-> 已实现五个功能：时效落地（§三）· 引用归因与拒答（§四）· 入库版本管理（§五）· 检索质量（§六）·
-> 输出侧数字一致性校验（§七）。
+> 已实现七个功能：时效落地（§三）· 引用归因与拒答（§四）· 入库版本管理（§五）· 检索质量（§六）·
+> 输出侧数字一致性校验（§七）· L1 情景记忆（§八）· 记忆的权限继承（§九）。
 >
-> 阅读顺序建议：先看 §一 的全景调用链建立地图，再按 §三→§七 逐个读。
+> 阅读顺序建议：先看 §一 的全景调用链建立地图，再按 §三→§九 逐个读。
+> §八/§九 与其余五节的关系不同：前五节各自是一个独立能力，这两节是**同一件事的两个阶段**
+> —— §八 把多轮对话接起来（阶段 0），§九 补上它欠的权限过滤（阶段 1）。建议连着读。
 > 每个功能都按「解决什么问题 → 改造前状态 → 代码方法表 → 设计取舍 → 单测」组织。
 
 ---
@@ -38,12 +40,17 @@
 ## 一、先看全景：一次对话的完整调用链
 
 ```
-POST /api/session/chat  {sessionId, sessionToken, message, bizDate?}
+POST /session/chat  {sessionId, sessionToken, message, bizDate?}
   └─ SessionController.chat → parseBizDate() → BankAssistant.chat(..., LocalDate)
-       └─ ChatClient(advisors=[PermissionAdvisor, RetrievalAdvisor, NumericGuardrailAdvisor])
+       └─ ChatClient(advisors=[PermissionAdvisor, MemoryAdvisor,
+                               RetrievalAdvisor, NumericGuardrailAdvisor])
             ├─ ① PermissionAdvisor        (order = HIGHEST_PRECEDENCE，最先)
             │      三层校验 → 把 envelope + accessFilter 写进 context
-            ├─ ② RetrievalAdvisor         (order = 0，在权限之后)
+            ├─ ② MemoryAdvisor            (order = HIGHEST_PRECEDENCE+1000)
+            │      ├─ loadRecentTurns()   取最近 N 轮，按**本轮实况信封**过滤后注入 prompt
+            │      ├─ 写 CONTEXT_HISTORY_TURNS（本轮实际注入了哪几轮，供审计）
+            │      └─ appendTurn()        轮末把"结论 + 指针 + 密级"落库（after，失败隔离）
+            ├─ ③ RetrievalAdvisor         (order = 0，在记忆之后)
             │      decide()
             │        ├─ QueryExpander.expand()    术语归一化 → 多路查询变体
             │        ├─ 逐路 similaritySearch()    每路都套同一个 accessFilter
@@ -52,14 +59,14 @@ POST /api/session/chat  {sessionId, sessionToken, message, bizDate?}
             │        ├─ 时效门禁 TemporalGate      剔除已废止 / 未生效
             │        ├─ 截断到 topK                ← 在两层门禁之后
             │        └─ 放行 or 拒答（拒答完全不调模型）
-            ├─ ③ NumericGuardrailAdvisor  (order = 10，在检索之后)
-            │      把 ② 写进 context 的 CONTEXT_RETRIEVED_DOCS 当"出处池"
+            ├─ ④ NumericGuardrailAdvisor  (order = 10，在检索之后)
+            │      把 ③ 写进 context 的 CONTEXT_RETRIEVED_DOCS 当"出处池"
             │        ├─ 从答案里抽出金额 / 比例 / 期限 → 归一化
             │        ├─ 集合差：答案里有、原文里没有的 → 违规
             │        └─ 有违规则换掉整个响应（模型已经调完了，但不把答案吐给用户）
-            └─ ④ ChatModel 调用（仅在 ①② 放行时发生）
+            └─ ⑤ ChatModel 调用（仅在 ①③ 放行时发生）
 
-POST /api/kb/ingest
+POST /kb/ingest
   └─ RagDocumentIngestService.ingestDir()
        ├─ 阶段一 collect()                        全部解析 + 权限预检
        │    └─ 任一文档不合法 → 整体中止（向量库里不留半份知识库）
@@ -68,14 +75,24 @@ POST /api/kb/ingest
             └─ 旧版本照常入库，靠时效区间挡在现行口径之外（不删除）
 ```
 
-**关键设计**：三个 advisor 通过 `context` 单向传递数据，不直接互相引用。
+**关键设计**：四个 advisor 通过 `context` 单向传递数据，不直接互相引用。
 `PermissionAdvisor` 是**生产者**（写 `CONTEXT_ENVELOPE` / `CONTEXT_ACCESS_FILTER`），
-`RetrievalAdvisor` 既是消费者又是生产者（读权限、写 `CONTEXT_RETRIEVED_DOCS`），
-`NumericGuardrailAdvisor` 是末端消费者。这样权限、检索、输出校验三块逻辑可以独立演化。
+`MemoryAdvisor` 是"先消费再生产"（读权限信封过滤历史、写 `CONTEXT_HISTORY_TURNS`），
+`RetrievalAdvisor` 也是"先消费再生产"（读权限、写 `CONTEXT_RETRIEVED_DOCS`），
+`NumericGuardrailAdvisor` 是末端消费者。这样权限、记忆、检索、输出校验四块逻辑可以独立演化。
 
 **order 是安全边界，不只是排序**：值越小越在外层（越早拿到请求、越晚拿到响应）。
 鉴权放在最外层，是为了在**进入模型之前**就把无权限的请求挡掉；
 数字校验放在最内层，是因为它要等检索结果落进 context、也要等模型把答案生成完。
+
+**`MemoryAdvisor` 为什么夹在权限与检索之间**（这两条都是安全约束，不是手感）：
+
+1. **它读的是"本轮实况信封"**，所以必须排在 `PermissionAdvisor` 之后 —— 它要拿信封里的
+   `dataClearanceLevel` 去过滤历史（功能七）。
+2. **它看到的用户消息必须是未被 `augment()` 增强的那一份**，所以必须排在 `RetrievalAdvisor`
+   之前 —— 否则落库的历史里会带上整段检索原文，"存指针不存内容"当场破功（功能六）。
+   实测依据：`L1ChainScaffold.firstTurnIsPersistedWithDocClearance` 断言落库的
+   `user_message` 逐字等于用户原话。
 
 ## 二、权限三把锁（项目原有基础，先读懂它才能改检索）
 
@@ -627,18 +644,212 @@ private List<Document> retrieve(VectorStore store, String query, String accessFi
 - **不处理相对时间**："去年""三个月后"这类表述不参与校验（本次范围是金额／比例／期限，日期本身不在内）
 - **模型复述提问里的数字会被判违规**：用户问"50 万元取现要授权吗"、原文只规定到 5 万／20 万两档，模型顺着答了 50 万 —— 这个数在原文没有出处，会被拦。**这是刻意的**：不附和用户给出的错误前提，在银行场景是对的
 
-## 八、可复用的 Spring AI 技能点（换个项目也用得上）
+## 八、功能六：L1 情景记忆（多轮对话能续上，且不成为权限模型的旁路）
+
+### 解决什么问题
+
+多轮对话的指代消解需要历史（RAG-04 #8 的一半）。但"给带权限的 RAG 加记忆"不是引个
+`ChatMemory` 就完了 —— 下面第一条取舍是本功能真正的难点。
+
+> ⚠️ **先把边界说清，免得读成"多轮检索已经好了"**：本节做的是**把历史给到模型**，
+> 不是**把历史用进检索**。改动只到 prompt 为止 —— 检索层（`QueryExpander`）看到的
+> 仍然是用户那句原话，第 2 轮问「那它呢」时它拿这三个字去召回。真正的指代消解
+> （把「那它呢」补全成自包含问题）归 RAG-04 #8，尚未实现；现在做完的是它的**前置**。
+
+### 决策一：不用 `MessageChatMemoryAdvisor`，自己写
+
+它存的是**消息本身**，挂到本管线上就形成权限模型的一条**旁路**：
+
+| 旁路 | 为什么 |
+|---|---|
+| 绕过权限门禁 | `accessFilter` 只在**检索那一刻**生效，历史回放根本不经过 `RetrievalAdvisor` 的权限分支 |
+| **降级后仍可读** | 上一轮取到密级 4 的结论，本轮 `authVersion` 变了检索侧会拦，但**历史里那段答案照样进 prompt** —— `SessionAuthService` 每次请求实时校验的 TOCTOU 防护被整个绕过 |
+| 密级混洗 | 同会话先问高密级再问低密级，低密级答案由历史里的高密级结论拼出来 |
+| 元数据推理 | 即便正文脱敏，引文标签仍在（"存在 doc-004 这份密级 4 的制度"） |
+
+一句话：**检索层的权限是"每次现查"的，记忆层若是"整段回放"的，记忆就是权限模型上的一条旁路。**
+本功能的对策是"存指针不存内容"（本节的决策二）+ "读取时按实况信封过滤"（功能七），
+而不是给 `ChatMemory` 套个壳。
+
+### 决策二：存"结论 + 指针"，绝不存内容
+
+`chat_message` 只落三样：用户原话、最终答案全文、引文指针（`doc_id + doc_version + chunk_id`）。
+不落 `RetrievalAdvisor.augment()` 渲染出的那段带检索原文的 prompt。四条理由：
+
+1. 回看时能用**当前**权限按指针重取原文，取不到就如实说"你已无权查看" —— 存了渲染后的 prompt 就做不了这个判断（原文已跟着历史走了）
+2. 存档体积：一条 10KB 答案可能对应 50KB 原文，且每轮重复
+3. 堵死密级混洗：低密级问题无法从历史里"继承"高密级原文
+4. 保住引用归因链：数字必须能回原文核对，摘要承载不了事实
+
+> 另外存了 `doc_version`：原文可能已出新版，回看要能标注"该轮引用 v3，当前已有 v5"。
+
+### 决策三：order 夹在权限与检索之间
+
+取 `Advisor.DEFAULT_CHAT_MEMORY_PRECEDENCE_ORDER`（= `HIGHEST_PRECEDENCE + 1000`），
+正好落在 `PermissionAdvisor` 与 `RetrievalAdvisor` 之间，不必自己编数字。
+两条理由（读实况信封 / 看到的必须是未增强的用户消息）见 §一 末尾。
+
+### 三个踩过的坑（换了项目照样会踩）
+
+| 坑 | 表现 | 落点 |
+|---|---|---|
+| `ChatClientRequest.mutate()` **复制** context | `mutate()` 内部是 `new HashMap<>(this.context)`，mutate 之后再 `put` 的键，下游（以及响应里的 context）都看不到 | 所以 `CONTEXT_HISTORY_TURNS` 必须在 `mutate()` **之前** put |
+| 检索结果要从 `response.context()` 读，不能从原始 request 读 | 本轮**没有**历史时 `injectHistory` 不重建 request，检索就写在原始 map 上；**有**历史时写在复制品上 | 于是"从原始 request 读"第一轮读得到、第二轮起读不到 —— 表现为拒答被误判成放行、引文指针恒为空，**且完全不报错**。这是最阴的一个 |
+| `BaseAdvisor` 默认的 `adviseStream` 拿不到完整答案 | 它的 `after()` 只在**带 finishReason 的那一帧**触发，拿到的是最后一帧 | 所以流式写回要用 `ChatClientMessageAggregator` 聚合。`MessageChatMemoryAdvisor` 自己重写 `adviseStream` 也是这个原因 |
+
+### 失败隔离：记忆是体验层，不是权限层
+
+`MemoryAdvisor` 是记忆读写失败**唯一**的 catch 边界（`ChatMemoryService` 与 DAO 保持 fail-fast，
+异常一律上抛）。读失败 → 当作没有历史（绝不能把用户这轮的问答顶掉）；写失败 → 只告警
+（少一条回看记录，不是用户的问题）。
+
+流式下**不缓冲、不重排、不减少帧**，打字机效果不受影响 —— 与 `NumericGuardrailAdvisor`
+"先缓冲全帧再校验"是**相反**的取舍：那边不缓冲就拦不住，这边只是记账，没有理由牺牲体验。
+
+## 九、功能七：记忆的权限继承（按本轮实况信封过滤）
+
+### 解决什么问题：RAG-07 §一 表 #2「降级后仍可读」
+
+功能六把数据面建好了，但留着一个缺口：**用户上一轮在授权范围内取到密级 4 的结论，
+本轮权限被降级 —— 检索侧会拦住密级 4 的资料，可历史里上一轮的那段答案照样进 prompt。**
+等于把 `SessionAuthService` 每次请求实时校验 `auth_version` 的 TOCTOU 防护整个绕过去。
+
+这一节就是把这条旁路堵上：**每轮历史带一个"内容侧密级"，读取时用本轮实况信封重判。**
+
+### 密级怎么算：`max(该轮引用资料的 doc_level)`
+
+规则一句话：**"这轮内容可能反映的最高密级"**。
+
+| 情况 | 取值 | 理由 |
+|---|---|---|
+| 该轮检索到了资料（`CONTEXT_RETRIEVED_DOCS` 非空） | `max(doc_level)` | 答案可能反映其中任意一篇的内容，含最高那篇 |
+| 该轮没检索到资料（拒答等） | 会话密级 `envelope.dataClearanceLevel()` | 无从判定内容来源，就按本轮用户能看到的天花板封顶（宁严勿松） |
+
+第 2 行正常不可达 —— `RetrievalAdvisor` 写进 `CONTEXT_RETRIEVED_DOCS` 的是**过完两道门禁 +
+截断到 topK 之后**的列表，所以其中每篇的 `doc_level` 必定落在 `[1, 会话密级]` 内。
+它是给脏数据与将来新增的写入路径兜底的。
+
+> **不采用**"读取时按 `cited_chunk_refs` 回向量库重取原文密级"：那要给每轮历史加一次 PG
+> 往返，并在"读记忆"这条路上引入对向量库可用性的硬依赖，而功能六用指针的初衷正是避免这个。
+
+### 文档里写过的 `min(写入者密级, 资料密级)` 是错的，而且是个空操作
+
+早期设计稿（RAG-07 §三 与 A.2）写的是 `min`，两处都已改为 `max`。理由有两层，第二层才是关键：
+
+- **第一层（不够有力）**：`min(2, 4) = 2` 恰好是设计稿自己的例子里标着"**✗ 错！**"的那个值
+- **第二层（决定性）**：`min` 在干净数据上**恒等于右边那一项**。因为 `passesGate` 已经保证
+  `doc_level <= envelope.dataClearanceLevel()`，所以"引用资料的最高密级 ≤ 写入者密级"恒成立
+  → `min` 永远取到资料侧。**也就是说 `min` 什么都不做，只在 metadata 脏数据时才生效 ——
+  而生效方向恰好是不安全的那一侧**：把密级 4 的内容标成 2，正是 D2「洗密级」通道。
+
+同样的道理，**刻意不按会话密级夹取上限**：已过门禁的资料其密级天然 ≤ 会话密级，"再夹一次"
+在干净数据上同样是空操作，而在脏数据上只会把密级调低 —— 与 `min` 是同一个错误。
+
+### 读取侧：过滤在 Service，且在 SQL 的 `LIMIT` **之后**
+
+判据与 `RetrievalAdvisor.passesGate` 判定检索结果用的是**同一把尺子**：
+
+```
+1 <= 该轮 clearance_level <= 本轮 envelope.dataClearanceLevel()
+```
+
+**上界来自信封（本轮实况），不是行里存的快照** —— 这就是"记忆可以过期，权限不能过期"
+（RAG-07 §二 L5）在代码里的落点。写反了（按行里的快照过滤）漏洞会原地复活，
+因为快照总是等于自己的密级，那个过滤恒等于不过滤。
+
+三个位置选择，各有理由：
+
+- **放在 `ChatMemoryService`，不放进 DAO**：沿用阶段 0 立的规矩**一条权限策略，一个出口**。
+  `ChatMessageDao` 的接口形状本身就防误用 —— 它连"按权限版本筛"的参数都没有
+- **在 Java 侧筛，不写进 SQL 的 `WHERE`**：写进去语义就变成"在有权读的行里取最近 N 行"，
+  降级用户只要最近几轮读不到，窗口就会**自动往前多取几轮来凑数**，等于把降级绕过去了。
+  正确的语义是"先取最近 N 轮，再看其中哪些能读"：**窗口该空就空**
+- **实现成 `toTurn()` 的第 4 个 null 理由**（前三个：拒答轮、缺 assistant 的残轮、
+  `user_id` 与信封不符）：于是"绝不出现半轮"这条不变量由构造保证，将来加第 5 个理由
+  也不会漏掉某个分支
+
+### 写入侧：`MemoryWriteGuard` 只能"算严"，不能"拒绝"
+
+RAG-07 §三 的 `MemoryWriteGuard` 表里多行写着「拒绝写入」，**在 L1 上不能这么做**：
+L1 是审计记录（回答"发生了什么"），任何拒绝写入都会在审计里留一个洞 —— 用户问了、
+系统答了，却不留痕。§四 那句「任何进不了 L1 的记忆都不该进 L2」也印证了拒绝语义是为 L2 设计的。
+
+所以本阶段的 guard 是个**纯函数**，产出一个更严的密级值，一行都不少。§三 表里的四项检查
+在 L1 上逐条落空：**归属**已由读取侧复核覆盖、**scope** L1 恒为"本次会话"且无该列、
+**内容红线**（`CodeSniffer` 认的是代码不是凭证，拿它拦会拦掉正常业务答案）、
+**来源**就是本行自身。
+
+### `DEFAULT 5`（最高密级）：一个默认值同时管两件事
+
+新增列 `clearance_level TINYINT UNSIGNED NOT NULL DEFAULT 5`，紧挨 `perm_auth_version` 放置，
+让两个权限字段相邻、语义对比最清楚：
+
+| 列 | 含义 | 用途 |
+|---|---|---|
+| `clearance_level` | 该轮内容可能反映的最高密级 | **读取判定用** |
+| `perm_auth_version` | 该轮写入时的权限版本 | **仅审计**，绝不参与读取过滤 |
+
+默认值刻意取 **5（最高）而不是 1**：
+
+1. **迁移回填**：`ALTER` 时既有行一律变成 5 → 旧历史谁都读不到。这是**想要**的行为 ——
+   那些行的真实密级已无法回溯判定（阶段 0 根本没存），宁可读不到，也不能默认成 1 放行。
+   实际执行时本地库 56 行全部回填为 5，与预期一致
+2. **fail-closed**：将来若有别的写入路径漏了这列，漏掉的那行是"谁都读不到"而不是"谁都能读到"。
+   这条有测试锁住：用 `JdbcTemplate` 原生 INSERT **故意不给这列**，断言读回 5
+
+### 对比开关：一个开关决定漏洞在不在
+
+`rag.memory.clearance-filter-enabled`（默认 `true`）留着是为了**能复现漏洞**，便于对比演示。
+**只关读取、不关写入** —— 写入侧算密级是记账，没有拒绝语义，关掉只会让库里的行"密级未知"。
+
+它的价值在一个测试里体现得最直接：`L1ClearanceChainTest` 与 `L1ClearanceFilterOffChainTest`
+是**同一个场景**（高密级轮 → 降级 → 再问），只差这一个配置项，一个断言"进不了 prompt"、
+一个断言"照样进去了"。
+
+### 边界：存的是快照
+
+能堵住"用户被降级后仍能读到自己旧轮的高密级结论"（§一 表 #2），**堵不住**"当时引用的
+那份制度后来被提升密级" —— 那需要读取时按活密级重判或异步重算，归 RAG-04 的阶段 4 巡检。
+**这个边界是明确记下的缺口，不是遗漏。**
+
+### 单测（84 个，整个记忆模块）
+
+| 测试类 | 覆盖 |
+|---|---|
+| `ChatMemoryServiceTest`（21） | 读窗口顺序／行数／归属复核／拒答轮／残轮 + **密级过滤 7 例** + 写回（单语句两行、留存期、指针 JSON） |
+| `MemoryAdvisorTest`（13） | 开关直通、历史注入、失败隔离、context 键、order 契约 |
+| `TurnExtractorTest`（12） | 抽字段、**未增强的用户消息**、拒答原因、**密级取 max** |
+| `MemoryWriteGuardTest`（10） | 取 max 而非 min、无资料回退、脏值（`0`／负数／字符串／`6`）、**不按信封夹上限** |
+| `HistoryMessageMapperTest`（7） | 前导 system + 其余、截断只作用于历史 |
+| `ChatMessageDaoContextTest`（7） | 真实 MySQL 往返、`uk_session_turn`、**`DEFAULT 5` fail-closed** |
+| `MemoryPropertiesTest`（6） | 配置夹取与回退（`windowTurns=0` 不能静默变成"无记忆"） |
+| `L1ClearanceChainTest`（4） | **全链路打桩**：落库两行带密级、第二轮真的注入历史、**降级后读不到**、advisor 顺序 |
+| `L1ClearanceFilterOffChainTest`（4） | 同上，只差一个配置项：**降级后照样读到（漏洞复现）** |
+
+> 全链路打桩的两个讲究，复用的时候可以直接照抄：
+> ① 资料正文与答案**都不含阿拉伯数字** —— `NumericGuardrailAdvisor` 就在链上（order 10），
+> 含数字的答案会被它拦成拒答，而拒答轮进不了历史，测试会以一种极难查的方式失败；
+> ② 每条断言只依赖**只在历史里出现**的字符串（上一轮的原话与答案），绝不用当前这轮的问题
+> 当证据 —— 当前问题本来就在 prompt 里。
+> 另外检索侧不调模型（`QueryExpander` 是词典驱动的确定性改写），所以 `openAiChatModel` 收到的
+> 调用全部来自"答案生成"这一处，拦截点没有噪声。
+
+## 十、可复用的 Spring AI 技能点（换个项目也用得上）
 
 | 技能点 | 在本项目的体现 |
 |---|---|
-| **Advisor 链的 order 语义** | `PermissionAdvisor = HIGHEST_PRECEDENCE`（最外层先鉴权），`RetrievalAdvisor = 0`，`NumericGuardrailAdvisor = 10`（最内层）。值越小越外层：**越早拿到请求、越晚拿到响应**。顺序不只是排序，是安全边界 |
+| **Advisor 链的 order 语义** | `PermissionAdvisor = HIGHEST_PRECEDENCE`（最外层先鉴权），`MemoryAdvisor = HIGHEST_PRECEDENCE + 1000`，`RetrievalAdvisor = 0`，`NumericGuardrailAdvisor = 10`（最内层）。值越小越外层：**越早拿到请求、越晚拿到响应**。顺序不只是排序，是安全边界 |
+| **链的排序由 `getOrder()` 决定，与传参顺序无关** | `defaultAdvisors(a, b, c, d)` 的书写顺序不影响执行顺序 —— `OrderComparator.sort` 会重排。所以"看起来排对了"不算数，要断言 |
 | **一个 Advisor 同时做前置和后置** | `adviseCall` 里 `chain.nextCall()` **之前**是前置处理、**之后**是后置处理。数字校验整个逻辑都在调用之后 —— 但前置的拒答可以完全不调模型 |
 | **用 context 在 advisor 间传数据** | `ChatClientRequest.context()` 是一个 Map，上游写、下游读。比 advisor 之间互相持有引用更解耦 |
 | **advisorParams 往 context 里塞值** | `spec.param("sessionId", ...)` 的值会进 `request.context()`，这是 Spring AI 1.0.0 的行为（`MessageChatMemoryAdvisor` 同款用法） |
 | **短路不调模型** | `adviseCall` 里不调 `chain.nextCall()` 而直接构造 `ChatClientResponse` 返回 —— 这是"拒答"能落地的前提 |
-| **可测性设计** | 判定逻辑抽成 `static` 纯函数（`TemporalGate.judge`、`invalidCitations`），不依赖 Spring 容器就能单测；测试用 2 参便捷构造器 `new RetrievalAdvisor(provider, topK)` 避开容器 |
+| **可测性设计** | 判定逻辑抽成 `static` 纯函数（`TemporalGate.judge`、`invalidCitations`、`MemoryWriteGuard.clearanceFor`），不依赖 Spring 容器就能单测；测试用 2 参便捷构造器 `new RetrievalAdvisor(provider, topK)` 避开容器 |
+| **`ChatClientRequest.mutate()` 会复制 context** | `mutate()` 内部 `new HashMap<>(this.context)` —— 它是**浅拷贝**。所以在 `mutate()` **之后**再往 `context` 里 `put` 的键，下游 advisor 是看不见的。要传数据必须写进 `mutate()` 之前的那份 builder |
+| **流式写回必须先聚合整条流** | `adviseStream` 的 `after()` 只在**最后一个** `finishReason` 帧触发一次，而那一帧里没有正文。想拿到完整答案再落库，得用 `ChatClientMessageAggregator.aggregateChatClientResponse(flux, consumer)` 把流缓冲起来。不过主链路目前只走 `.call()`，这条流式路径**尚未实测**（见 §七 的已知缺口） |
+| **打桩全链路测试（绕过"测不了集成"）** | 把 `ChatModel` 与 `VectorStore` 两个外部依赖打桩，其余（advisor 链、context 传递、MySQL）全是真的，就能测出单测**测不到**的东西：Spring 实际解析出的 advisor 顺序、`TurnExtractor` 到底从哪个 context 读的检索结果、写回是否真落库。要点是**拦截点必须干净**——本例检索侧不调模型，所以 `openAiChatModel` 收到的调用全部来自答案生成 |
 
-## 九、复习自测题（能答上来就算真懂了）
+## 十一、复习自测题（能答上来就算真懂了）
 
 1. 为什么权限 fail-closed，而时效缺字段却 fail-open？两种默认策略的依据是什么？
 2. 时效区间为什么用闭区间？`effective_until` 那天到底算不算有效？
@@ -670,4 +881,14 @@ private List<Document> retrieve(VectorStore store, String query, String accessFi
 28. `NumericExtractor` 最初把「3 千元」提取成了 `3000元` 和 `1000元` 两个值，根因是什么？为什么要让"阿拉伯规则先提取并抹掉"？
 29. 这个 Advisor **一定会调用模型**（要先拿到答案才能核对），那它和 `RetrievalAdvisor` 的"拒答不调模型"矛盾吗？两者拦的分别是什么？
 30. 用户问「50 万元取现要授权吗」，原文只规定到 5 万／20 万档，模型顺着答了 50 万会被拦。这个行为合理吗？站在柜员角度呢？
+31. 记忆层为什么不能直接用 `MessageChatMemoryAdvisor`？它作为"旁路"绕过了哪三道防线？
+32. `MemoryAdvisor` 为什么必须夹在 `PermissionAdvisor` 与 `RetrievalAdvisor` 之间？两条理由分别是什么？
+33. `ChatClientRequest.mutate()` 内部做了什么？在它之后往 `context` 里 put 的键会怎样？
+34. `TurnExtractor` 为什么要从 `response.context()` 而不是原始 request 里读检索结果？两者什么时候会不一致？
+35. 记忆的读写失败为什么都被吞掉？这与"权限 fail-closed"矛盾吗？记忆在架构里到底算哪一层？
+36. `clearance_level = max(该轮引用资料的密级)`，为什么不是 `min(写入者密级, 资料密级)`？请给出**两层**论证（一层关于恒等式，一层关于它生效的方向）。
+37. `clearance_level` 的 `DEFAULT` 为什么取 5（最高密级）而不是 1？这一个默认值同时解决了哪两件事？
+38. 记忆的读取权限为什么要来自"本轮的实况信封"，而不是记忆行里存的快照？用了快照的话，`SessionAuthService` 的哪项防护会失效？
+39. 密级过滤为什么放在 Java 侧、在 SQL 的 `LIMIT` **之后**？写进 `WHERE` 看起来更"干净"，会带来什么语义问题？
+40. L1 记忆为什么不能"拒绝写入"？另外，阶段 1 堵住了「用户被降级」却堵不住哪一类升密场景，为什么？
 

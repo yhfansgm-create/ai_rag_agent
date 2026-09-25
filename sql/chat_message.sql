@@ -21,6 +21,9 @@
 --   ② answer_decision 只放 PROCEED/REFUSED 两个值, 精确原因归 refusal_reason
 --      (一个字段一个职责, 避免两个真相源漂移)
 --   ③ answer_decision 加 NOT NULL DEFAULT 'PROCEED'
+--
+-- ⚠️ clearance_level 的 DEFAULT 取 5(最高密级) 而非 1 —— 这是刻意的, 不是笔误。
+--    理由见列注释与文末"升级"段: 一个默认值同时管住"迁移回填"与"漏写 fail-closed"。
 -- =============================================================================
 
 USE `fan_ai_agent`;
@@ -46,10 +49,24 @@ CREATE TABLE IF NOT EXISTS `chat_message` (
     `refusal_reason`    VARCHAR(255)    DEFAULT NULL COMMENT '拒答原因(NO_HIT/PERMISSION_FILTERED/TEMPORAL_FILTERED/KB_UNAVAILABLE/UNVERIFIED_NUMBER)',
     `biz_date`          DATE            DEFAULT NULL COMMENT '本轮业务日期(时效判定的上下文; 回看要能回答"这轮按哪天判的")',
 
-    -- 权限快照：⚠️ 仅用于事后审计"这轮答案当时该不该给他看", 绝不参与读取判定 ------
-    -- 读取判定必须用本轮实况信封(记忆可以过期, 权限不能过期 —— 见 §二 L5 / §三 D3.3)。
-    -- 阶段 0 的 L1 行里没有任何内容侧密级(clearance_level 是阶段 1 才加的),
-    -- 所以"读历史时按权限过滤"在结构上就属于阶段 1, 不在这里做。
+    -- 权限双列：一个管"能不能读", 一个只留痕 -------------------------------------
+    -- clearance_level  : 该轮内容可能反映的最高密级。**读取判定用**
+    -- perm_auth_version: 该轮写入时的权限版本。**仅审计**, 绝不参与读取判定
+    --                    (记忆可以过期, 权限不能过期 —— 见 §二 L5 / §三 D3.3)
+    --
+    -- clearance_level 的取值口径(阶段 1)：
+    --   有检索结果 → max(该轮引用资料的 doc_level)   —— 答案可能反映其中任意一篇, 含最高那篇
+    --   无检索结果 → 回退会话密级                    —— 无从判定来源, 按用户能看到的天花板封顶
+    -- 读取侧按**本轮实况信封**比对(clearance_level <= envelope.dataClearanceLevel()),
+    -- 与 RetrievalAdvisor.passesGate 同一把尺子, 所以权限降级后读不到旧轮 —— 这就是
+    -- RAG-07 §一 表 #2「降级后仍可读」的堵法。
+    --
+    -- ⚠️ DEFAULT 5(最高) 是刻意的, 一个机制同时管两件事：
+    --   ① 迁移回填：ALTER 时既有行一律变 5 → 旧历史谁都读不到。这是对的 ——
+    --      那些行的真实密级无法回溯判定(阶段 0 没存), 宁可读不到, 也不能默认成 1 放行
+    --   ② fail-closed：将来若有别的写入路径漏了这列, 漏掉的行是"谁都读不到",
+    --      而不是"谁都能读到"。该行为由 DAO 测试锁住
+    `clearance_level`   TINYINT UNSIGNED NOT NULL DEFAULT 5 COMMENT '该轮内容可能反映的最高密级(读取判定用; 无引用资料时=会话密级)',
     `perm_auth_version` BIGINT          NOT NULL DEFAULT 0 COMMENT '该轮权限版本(审计用, 不参与读取过滤)',
 
     -- 生命周期 ---------------------------------------------------------------
@@ -65,3 +82,15 @@ CREATE TABLE IF NOT EXISTS `chat_message` (
   DEFAULT CHARSET = utf8mb4
   COLLATE = utf8mb4_0900_ai_ci
   COMMENT = '银行内部RAG助手-情景记忆(消息流水, 只存结论与指针)';
+
+-- -----------------------------------------------------------------------------
+-- 已有旧表(阶段 0)升级：加内容侧密级列（执行前请先备份）
+-- ALTER TABLE `chat_message`
+--   ADD COLUMN `clearance_level` TINYINT UNSIGNED NOT NULL DEFAULT 5
+--     COMMENT '该轮内容可能反映的最高密级(读取判定用; 无引用资料时=会话密级)'
+--     AFTER `biz_date`;
+--
+-- 执行后既有行一律回填为 5 → 旧历史谁都读不到。这是**想要**的行为, 不是副作用：
+-- 阶段 0 根本没存内容侧密级, 那些行的真实密级已无法回溯判定。
+-- 本地练习库若不想留这批读不到的行：TRUNCATE TABLE `chat_message`;
+-- -----------------------------------------------------------------------------

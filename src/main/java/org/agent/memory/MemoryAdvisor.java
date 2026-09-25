@@ -83,8 +83,12 @@ public class MemoryAdvisor implements CallAdvisor, StreamAdvisor {
                          @Value("${rag.memory.enabled:true}") boolean enabled,
                          @Value("${rag.memory.window-turns:3}") int windowTurns,
                          @Value("${rag.memory.max-chars-per-message:2000}") int maxCharsPerMessage,
-                         @Value("${rag.memory.retention-days:30}") int retentionDays) {
-        this(memoryService, new MemoryProperties(enabled, windowTurns, maxCharsPerMessage, retentionDays));
+                         @Value("${rag.memory.retention-days:30}") int retentionDays,
+                         @Value("${rag.memory.clearance-filter-enabled:true}") boolean clearanceFilterEnabled) {
+        // 这里刻意走 5 参规范构造、不用 4 参便捷构造：那个便捷构造是给测试与其它模块用的，
+        // 生产路径必须把开关真读进来，否则 rag.memory.clearance-filter-enabled 形同虚设
+        this(memoryService, new MemoryProperties(enabled, windowTurns, maxCharsPerMessage,
+                retentionDays, clearanceFilterEnabled));
     }
 
     /** 测试便捷构造，照 {@code NumericGuardrailAdvisor} 的两段式构造 */

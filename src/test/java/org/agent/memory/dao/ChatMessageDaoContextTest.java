@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 
 import java.time.LocalDate;
@@ -39,6 +40,15 @@ class ChatMessageDaoContextTest {
     @Autowired
     private ChatMessageDao dao;
 
+    /**
+     * 只用来验证"漏写 clearance_level 时数据库给什么"。这里拿到的是 MySQL 那个
+     * {@code JdbcTemplate}：{@code RagVectorStoreConfig} 里的 PG 连接是内联
+     * {@code new JdbcTemplate(...)}、并没有暴露成 bean，所以自动配置照常为
+     * {@code spring.datasource} 配一个。
+     */
+    @Autowired
+    private JdbcTemplate jdbcTemplate;
+
     @Test
     @DisplayName("一轮两行往返：列别名映射正确（含 enum / JSON / DATE / DATETIME 四类列）")
     void insertAndSelectRoundTrip() {
@@ -61,6 +71,7 @@ class ChatMessageDaoContextTest {
         assertThat(user.answerDecision()).isEqualTo(AnswerDecision.PROCEED);
         assertThat(user.refusalReason()).isNull();
         assertThat(user.bizDate()).isEqualTo(LocalDate.of(2026, 9, 25));
+        assertThat(user.clearanceLevel()).isEqualTo(4);
         assertThat(user.permAuthVersion()).isEqualTo(7L);
         // created_at 由数据库默认值填（insert 的列清单里没有它），能被读回来
         assertThat(user.createdAt()).isNotNull();
@@ -131,22 +142,64 @@ class ChatMessageDaoContextTest {
         assertThatThrownBy(() -> dao.insertTurn(turn)).isInstanceOf(DuplicateKeyException.class);
     }
 
+    @Test
+    @DisplayName("clearance_level 往返：TINYINT UNSIGNED 映射正常，且不与同轮另一行强制同值")
+    void clearanceLevelRoundTrip() {
+        String sid = UUID.randomUUID().toString();
+        // 同一轮故意给两个不同的值：DAO 只负责搬字节，"同轮两行同密级"是 Service 层的义务，
+        // 这里断言 DAO **没有**偷偷替调用方做归一化（否则 Service 的 bug 会被掩盖）
+        dao.insertTurn(List.of(userRow(sid, 1, AnswerDecision.PROCEED, 1),
+                assistantRow(sid, 1, AnswerDecision.PROCEED, 3)));
+
+        List<ChatMessageRow> rows = dao.selectRecentTurns(sid, 10);
+
+        assertThat(rows).extracting(ChatMessageRow::clearanceLevel).containsExactly(1, 3);
+    }
+
+    @Test
+    @DisplayName("fail-closed 默认值：原生 INSERT 漏写 clearance_level → 读回 5（谁都读不到）")
+    void missingClearanceLevelDefaultsToHighest() {
+        String sid = UUID.randomUUID().toString();
+        // 故意绕开 DAO：模拟"将来另一条写入路径漏了这列"。这列一旦漏写，
+        // 结果是"谁都读不到"而不是"谁都能读到" —— DEFAULT 5 的全部意义就在这里
+        jdbcTemplate.update("""
+                INSERT INTO chat_message
+                    (session_id, user_id, turn_no, role, user_message, answer_decision)
+                VALUES (?, ?, 1, 'user', '漏写密级的行', 'PROCEED')
+                """, sid, USER);
+
+        List<ChatMessageRow> rows = dao.selectRecentTurns(sid, 10);
+
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).clearanceLevel()).isEqualTo(5);
+    }
+
     // ------------------------------------------------------------------
     // 测试数据构造
     // ------------------------------------------------------------------
 
     private static ChatMessageRow userRow(String sid, int turnNo, AnswerDecision decision) {
+        return userRow(sid, turnNo, decision, 4);
+    }
+
+    private static ChatMessageRow userRow(String sid, int turnNo, AnswerDecision decision,
+                                         int clearanceLevel) {
         return new ChatMessageRow(sid, USER, turnNo, "user",
                 "第" + turnNo + "轮提问", null, null,
-                decision, reasonOf(decision), LocalDate.of(2026, 9, 25), 7L,
+                decision, reasonOf(decision), LocalDate.of(2026, 9, 25), clearanceLevel, 7L,
                 null, LocalDateTime.now().plusDays(30));
     }
 
     private static ChatMessageRow assistantRow(String sid, int turnNo, AnswerDecision decision) {
+        return assistantRow(sid, turnNo, decision, 4);
+    }
+
+    private static ChatMessageRow assistantRow(String sid, int turnNo, AnswerDecision decision,
+                                              int clearanceLevel) {
         return new ChatMessageRow(sid, USER, turnNo, "assistant",
                 null, "第" + turnNo + "轮回答",
                 "[{\"doc_id\":\"DOC-1\",\"doc_version\":\"v2\",\"chunk_id\":\"chunk-a\"}]",
-                decision, reasonOf(decision), LocalDate.of(2026, 9, 25), 7L,
+                decision, reasonOf(decision), LocalDate.of(2026, 9, 25), clearanceLevel, 7L,
                 null, LocalDateTime.now().plusDays(30));
     }
 

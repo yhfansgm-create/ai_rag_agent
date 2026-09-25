@@ -52,6 +52,7 @@ public interface ChatMessageDao {
                    answer_decision   AS answerDecision,
                    refusal_reason    AS refusalReason,
                    biz_date          AS bizDate,
+                   clearance_level   AS clearanceLevel,
                    perm_auth_version AS permAuthVersion,
                    created_at        AS createdAt,
                    expires_at        AS expiresAt
@@ -76,12 +77,13 @@ public interface ChatMessageDao {
             <script>
             INSERT INTO chat_message
                 (session_id, user_id, turn_no, role, user_message, answer_text,
-                 cited_chunk_refs, answer_decision, refusal_reason, biz_date, perm_auth_version, expires_at)
+                 cited_chunk_refs, answer_decision, refusal_reason, biz_date,
+                 clearance_level, perm_auth_version, expires_at)
             VALUES
             <foreach collection="rows" item="r" separator=",">
                 (#{r.sessionId}, #{r.userId}, #{r.turnNo}, #{r.role}, #{r.userMessage}, #{r.answerText},
                  #{r.citedChunkRefs}, #{r.answerDecision}, #{r.refusalReason}, #{r.bizDate},
-                 #{r.permAuthVersion}, #{r.expiresAt})
+                 #{r.clearanceLevel}, #{r.permAuthVersion}, #{r.expiresAt})
             </foreach>
             </script>
             """)

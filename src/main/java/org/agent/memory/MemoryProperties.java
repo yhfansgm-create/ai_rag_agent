@@ -16,17 +16,37 @@ package org.agent.memory;
  *                             存储侧永远不截断 —— 审计要原文，回看要能看全
  * @param retentionDays        {@code expires_at = created_at + N 天}；{@code 0} = 不设过期。
  *                             真实留存期由合规定，这里只是个可改的默认值
+ * @param clearanceFilterEnabled <b>读取侧</b>是否按本轮实况信封过滤历史（阶段 1）。
+ *                             默认开 —— 关掉就是阶段 0 的行为：降级用户仍能读到自己旧轮
+ *                             的高密级结论（RAG-07 §一 表 #2 的漏洞现场）。
+ *                             留着这个开关正是为了<b>能复现那个漏洞</b>，便于对比演示。
+ *                             <p>
+ *                             <b>只关读取，不关写入</b>：写入侧算密级是记账，没有拒绝语义，
+ *                             关掉它只会让库里出现"密级未知"的行，没有任何演示价值
  */
 public record MemoryProperties(
         boolean enabled,
         int windowTurns,
         int maxCharsPerMessage,
-        int retentionDays
+        int retentionDays,
+        boolean clearanceFilterEnabled
 ) {
 
     public static final int DEFAULT_WINDOW_TURNS = 3;
     public static final int DEFAULT_MAX_CHARS_PER_MESSAGE = 2000;
     public static final int DEFAULT_RETENTION_DAYS = 30;
+
+    /**
+     * 4 参便捷构造：密级过滤默认开（与 {@code application-local.yml} 的默认一致）。
+     * <p>
+     * 之所以留这么个构造而不是去改 18 处调用点：那批调用点里绝大多数（测试、
+     * 其它模块）根本不关心密级过滤，让它们被迫多写一个 {@code true} 只是噪声。
+     * 走的是同一个紧凑构造，所以校验规则一条都不会绕过。
+     */
+    public MemoryProperties(boolean enabled, int windowTurns, int maxCharsPerMessage,
+                            int retentionDays) {
+        this(enabled, windowTurns, maxCharsPerMessage, retentionDays, true);
+    }
 
     /**
      * 紧凑构造：非法值一律夹回默认。

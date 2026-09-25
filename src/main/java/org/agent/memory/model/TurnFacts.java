@@ -19,6 +19,10 @@ import java.util.List;
  * @param decision    本轮结论
  * @param refusalReason 拒答原因；{@code PROCEED} 轮为 null
  * @param citedRefs   本轮引文指针；拒答轮为空列表
+ * @param clearanceLevel 该轮内容可能反映的最高密级，由 {@code MemoryWriteGuard} 算出。
+ *                   <b>读取判定用</b>：读历史时按本轮实况信封比对，所以用户权限一旦降级，
+ *                   旧轮的高密级内容就不再进 prompt（RAG-07 §一 表 #2）。
+ *                   与 {@code authVersion} 的区别：那个只留痕，这个真的参与过滤
  */
 public record TurnFacts(
         String sessionId,
@@ -29,6 +33,7 @@ public record TurnFacts(
         String answerText,
         AnswerDecision decision,
         String refusalReason,
-        List<CitedChunkRef> citedRefs
+        List<CitedChunkRef> citedRefs,
+        int clearanceLevel
 ) {
 }

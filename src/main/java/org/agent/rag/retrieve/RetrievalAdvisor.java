@@ -375,12 +375,28 @@ public class RetrievalAdvisor implements CallAdvisor, StreamAdvisor {
         if (kbObj == null || !envelope.kbIds().contains(String.valueOf(kbObj))) {
             return false;
         }
-        Object level = doc.getMetadata().get("doc_level");
-        int lv = level instanceof Number n ? n.intValue() : -1;
+        int lv = docLevelOf(doc);
         if (lv < 1 || lv > envelope.dataClearanceLevel()) {
             return false;
         }
         return orgPathAllowed(doc.getMetadata().get("org_codes"), envelope.orgPath());
+    }
+
+    /**
+     * 读出资料的 {@code doc_level}；读不出数值返回 {@code -1}。
+     * <p>
+     * 提到 {@code public static} 是因为它现在有两个调用方（门禁 + 记忆密级分类），
+     * 而"怎么算读不出来"必须是<b>同一套口径</b> —— 与 {@link #bizDate} 同样的理由。
+     * <p>
+     * <b>本方法只负责取值，不做任何范围判定</b>：{@code -1} 的含义由调用方决定 ——
+     * {@link #passesGate} 把它当"门禁不过"（fail-closed），
+     * {@code MemoryWriteGuard} 把它当"这一篇不参与取 max"。
+     * 所以离群值（{@code 0}、{@code 6}）在这里<b>原样返回</b>，不夹取、不丢弃：
+     * 一旦这里偷偷归一化，两个调用方就再也没机会各自决定该怎么处理脏数据。
+     */
+    public static int docLevelOf(Document doc) {
+        Object level = doc.getMetadata().get("doc_level");
+        return level instanceof Number n ? n.intValue() : -1;
     }
 
     /**

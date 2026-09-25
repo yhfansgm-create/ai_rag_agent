@@ -52,6 +52,9 @@ public final class TurnExtractor {
     public static TurnFacts extract(ChatClientRequest originalRequest, SessionEnvelope envelope,
                                     ChatClientResponse response) {
         String reason = refusalReason(response);
+        // 检索结果取一次、用两处（引文指针 + 密级），别读两遍 —— 它是从 context 的
+        // 不可变 map 里取的，两次读到的必然是同一个列表，重复读只是白写一行
+        List<Document> docs = retrievedDocs(response);
         return new TurnFacts(
                 envelope.sessionId(),
                 envelope.userId(),
@@ -61,7 +64,8 @@ public final class TurnExtractor {
                 Texts.answerText(response),
                 reason == null ? AnswerDecision.PROCEED : AnswerDecision.REFUSED,
                 reason,
-                CitedChunkRef.fromDocuments(retrievedDocs(response)));
+                CitedChunkRef.fromDocuments(docs),
+                MemoryWriteGuard.clearanceFor(docs, envelope));
     }
 
     /**

@@ -150,6 +150,28 @@ class TurnExtractorTest {
         assertThat(explicit.bizDate()).isEqualTo(LocalDate.of(2026, 3, 1));
     }
 
+    @Test
+    @DisplayName("clearance_level：有资料取资料密级的 max（可低于信封密级），无资料回退信封密级")
+    void clearanceLevelFollowsCitedDocs() {
+        // 无资料 → 回退本轮信封密级（此例信封为 2）
+        TurnFacts noDocs = TurnExtractor.extract(request(context(), QUESTION), envelope(),
+                response("答案", context()));
+        assertThat(noDocs.clearanceLevel()).isEqualTo(2);
+
+        // 有资料 → 走"取 max"那条分支。密级 1 ≠ 回退值 2，才能证明真的读了资料，
+        // 而不是碰巧回退到同一个数
+        TurnFacts lowOnly = TurnExtractor.extract(request(context(), QUESTION), envelope(),
+                response("答案", context(RetrievalAdvisor.CONTEXT_RETRIEVED_DOCS,
+                        List.of(docWithLevel("chunk-a", 1), docWithLevel("chunk-b", 1)))));
+        assertThat(lowOnly.clearanceLevel()).isEqualTo(1);
+
+        // 1 与 2 混在一起 → 2。取 min 的话这里会是 1（那正是 D2 洗密级通道的方向）
+        TurnFacts mixed = TurnExtractor.extract(request(context(), QUESTION), envelope(),
+                response("答案", context(RetrievalAdvisor.CONTEXT_RETRIEVED_DOCS,
+                        List.of(docWithLevel("chunk-a", 1), docWithLevel("chunk-b", 2)))));
+        assertThat(mixed.clearanceLevel()).isEqualTo(2);
+    }
+
     // ------------------------------------------------------------------
     // 安全断言：本功能最核心的一条
     // ------------------------------------------------------------------
@@ -210,6 +232,12 @@ class TurnExtractorTest {
 
     private static Document doc(String chunkId, String text, String docId, String version) {
         return new Document(chunkId, text, Map.of("doc_id", docId, "doc_version", version));
+    }
+
+    /** 带 {@code doc_level} 的资料，用于密级断言 */
+    private static Document docWithLevel(String chunkId, int level) {
+        return new Document(chunkId, "正文",
+                Map.of("doc_id", "DOC-" + chunkId, "doc_version", "v1", "doc_level", level));
     }
 
     private static SessionEnvelope envelope() {

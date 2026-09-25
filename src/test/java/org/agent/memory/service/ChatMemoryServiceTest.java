@@ -238,9 +238,98 @@ class ChatMemoryServiceTest {
         when(dao.selectMaxTurnNo(SID)).thenReturn(0);
 
         service().appendTurn(new TurnFacts(SID, USER, LocalDate.of(2026, 9, 25), 7L,
-                "问题", "回答", AnswerDecision.PROCEED, null, List.of()), PROPS);
+                "问题", "回答", AnswerDecision.PROCEED, null, List.of(), 2), PROPS);
 
         assertThat(capturedRows().get(1).citedChunkRefs()).isNull();
+    }
+
+    // ------------------------------------------------------------------
+    // 密级过滤（阶段 1）：读历史按**本轮实况信封**判，不按行里的快照
+    // ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("密级过滤：轮次密级 4 > 信封密级 2 → 整轮不进 prompt")
+    void clearanceAboveEnvelopeIsDropped() {
+        when(dao.selectRecentTurns(anyString(), anyInt()))
+                .thenReturn(turnRows(1, AnswerDecision.PROCEED, 4));
+
+        assertThat(service().loadRecentTurns(envelope(USER, 2), PROPS)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("密级过滤：★ 同一条轮次在信封密级 4 下能读到（依据是本轮实况，不是轮次自身快照）")
+    void sameTurnIsReadableUnderHigherEnvelope() {
+        when(dao.selectRecentTurns(anyString(), anyInt()))
+                .thenReturn(turnRows(1, AnswerDecision.PROCEED, 4));
+
+        // 同一个"轮次密级 4"：信封 2 时读不到（上一个用例），信封 4 时读得到。
+        // 这条断言把"过滤依据是**本轮信封**"钉死 —— 若写成按行里的快照过滤，
+        // 那就恒等于不过滤（快照总是等于自己的密级），漏洞会原地复活
+        assertThat(service().loadRecentTurns(envelope(USER, 4), PROPS))
+                .extracting(ChatTurn::turnNo).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("密级过滤：★ 关掉开关 → 高密级轮又进 prompt（§一 表 #2「降级后仍可读」复现）")
+    void filterOffReproducesTheLeak() {
+        when(dao.selectRecentTurns(anyString(), anyInt()))
+                .thenReturn(turnRows(1, AnswerDecision.PROCEED, 4));
+        MemoryProperties filterOff = new MemoryProperties(true, 3, 2000, 30, false);
+
+        // 这就是"同一个场景，一个开关决定漏洞在不在"——开关的演示价值全在这个断言里
+        assertThat(service().loadRecentTurns(envelope(USER, 2), filterOff))
+                .extracting(ChatTurn::turnNo).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("密级过滤：只丢该轮，不让更早的轮「补位」—— 不补发第二次查询")
+    void filterDoesNotBackfillTheWindow() {
+        // 最近一轮密级 4（读不到），更早一轮密级 1（读得到）
+        when(dao.selectRecentTurns(anyString(), anyInt())).thenReturn(List.of(
+                newRow(2, "user", AnswerDecision.PROCEED, USER, 4),
+                newRow(2, "assistant", AnswerDecision.PROCEED, USER, 4),
+                newRow(1, "user", AnswerDecision.PROCEED, USER, 1),
+                newRow(1, "assistant", AnswerDecision.PROCEED, USER, 1)));
+
+        List<ChatTurn> turns = service().loadRecentTurns(envelope(USER, 2), PROPS);
+
+        assertThat(turns).extracting(ChatTurn::turnNo).containsExactly(1);
+        // 关键：不接受"再查一次把窗口凑满"。若把密级条件下推进 SQL 的 WHERE，
+        // 语义就变成"在有权读的行里取最近 N 行" —— 降级用户只要最近几轮读不到，
+        // 窗口就会自动往前多取几轮来凑数，等于把降级绕过去了
+        verify(dao, times(1)).selectRecentTurns(anyString(), anyInt());
+    }
+
+    @Test
+    @DisplayName("密级过滤：组内两行密级不一致时取 max（脏数据往严的方向判）")
+    void groupClearanceTakesMax() {
+        // 正常由写入侧保证两行同值；这里模拟脏数据：一行 1、一行 4。
+        // 取 min 的话 1 就成了整轮的"通行证"，密级 4 的内容照样进来
+        when(dao.selectRecentTurns(anyString(), anyInt())).thenReturn(List.of(
+                newRow(1, "user", AnswerDecision.PROCEED, USER, 1),
+                newRow(1, "assistant", AnswerDecision.PROCEED, USER, 4)));
+
+        assertThat(service().loadRecentTurns(envelope(USER, 2), PROPS)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("密级过滤：密级 0（非法值）判为不可读 —— 与列 DEFAULT 5 同一套 fail-closed")
+    void illegalZeroLevelIsNotReadable() {
+        when(dao.selectRecentTurns(anyString(), anyInt()))
+                .thenReturn(turnRows(1, AnswerDecision.PROCEED, 0));
+
+        assertThat(service().loadRecentTurns(envelope(USER, 2), PROPS)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("写回：两行带同一个 clearance_level（轮级字段，不能只有一行有）")
+    void bothRowsCarryTheSameClearance() {
+        when(dao.selectMaxTurnNo(SID)).thenReturn(0);
+
+        service().appendTurn(facts(AnswerDecision.PROCEED, null, 4), PROPS);
+
+        assertThat(capturedRows()).extracting(ChatMessageRow::clearanceLevel)
+                .containsExactly(4, 4);
     }
 
     // ------------------------------------------------------------------
@@ -256,8 +345,13 @@ class ChatMemoryServiceTest {
     }
 
     private static TurnFacts facts(AnswerDecision decision, String reason) {
+        return facts(decision, reason, 2);
+    }
+
+    private static TurnFacts facts(AnswerDecision decision, String reason, int clearanceLevel) {
         return new TurnFacts(SID, USER, LocalDate.of(2026, 9, 25), 7L,
-                "问题", "回答", decision, reason, List.of(new CitedChunkRef("D1", "v1", "c1")));
+                "问题", "回答", decision, reason, List.of(new CitedChunkRef("D1", "v1", "c1")),
+                clearanceLevel);
     }
 
     private static ChatMessageRow row(int turnNo, String role, AnswerDecision decision) {
@@ -268,20 +362,36 @@ class ChatMemoryServiceTest {
         return newRow(turnNo, role, AnswerDecision.PROCEED, "99999");
     }
 
+    /** 默认密级 2，与 {@link #envelope(String)} 的信封密级一致 —— 老用例不受权限过滤影响 */
     private static ChatMessageRow newRow(int turnNo, String role, AnswerDecision decision, String userId) {
+        return newRow(turnNo, role, decision, userId, 2);
+    }
+
+    private static ChatMessageRow newRow(int turnNo, String role, AnswerDecision decision,
+                                        String userId, int clearanceLevel) {
         boolean isUser = "user".equals(role);
         return new ChatMessageRow(SID, userId, turnNo, role,
                 isUser ? "q" + turnNo : null,
                 isUser ? null : "a" + turnNo,
                 isUser ? null : "[{\"docId\":\"D1\",\"docVersion\":\"v1\",\"chunkId\":\"c1\"}]",
                 decision, decision == AnswerDecision.REFUSED ? "NO_HIT" : null,
-                LocalDate.of(2026, 9, 25), 7L,
+                LocalDate.of(2026, 9, 25), clearanceLevel, 7L,
                 LocalDateTime.now(), LocalDateTime.now().plusDays(30));
     }
 
+    /** 该轮两行同密级 —— 写入侧的约定（{@code ChatMemoryService.row} 保证），测试里也要照做 */
+    private static List<ChatMessageRow> turnRows(int turnNo, AnswerDecision decision, int clearanceLevel) {
+        return List.of(newRow(turnNo, "user", decision, USER, clearanceLevel),
+                newRow(turnNo, "assistant", decision, USER, clearanceLevel));
+    }
+
     private static SessionEnvelope envelope(String userId) {
+        return envelope(userId, 2);
+    }
+
+    private static SessionEnvelope envelope(String userId, int clearance) {
         return new SessionEnvelope(SID, userId, "TELLER", "P3", "0101", "0100/0101",
-                2, List.of("kb-teller"), 7L, "MOCK",
+                clearance, List.of("kb-teller"), 7L, "MOCK",
                 LocalDateTime.now().plusHours(1), "kb_id in ['kb-teller']");
     }
 }

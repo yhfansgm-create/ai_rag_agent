@@ -81,7 +81,7 @@ org.agent
 │   ├── retrieve/                 查询扩展 → 多路召回 → 融合 → 两层门禁 → 拼引用
 │   ├── guard/                    答案里的数字回原文核验
 │   ├── config/  web/             向量库装配 / 入库路由
-├── memory/                       L1 情景记忆（读窗口 + 写一轮）
+├── memory/                       L1 情景记忆（读窗口 + 写一轮 + 按本轮实况信封过滤密级）
 └── playground/                   学习与评测工具，不在主链路上
 ```
 
@@ -183,8 +183,11 @@ HTML 版的好处是**能全局搜**、能看到继承树和"被谁引用"；读
 
 1. **`docs/` 与部分注释写的 `/api/...` 路由不存在**。项目未配置 `server.servlet.context-path`，
    实际路由是 `/session/chat`、`/kb/ingest`。已在相关类注释中标注，文档待改。
-2. **记忆层的权限过滤尚未实现**。`MemoryAdvisor` 类注释把对策写成"存指针不存内容 **+ 读取时按实况信封过滤**"，
-   但 `ChatMemoryService` 的注释明说后者"整个属于**阶段 1**「记忆过滤」的交付物"。
-   当前真正的防护只有前一半。
+2. ~~**记忆层的权限过滤尚未实现**。~~ ✅ **已消解（阶段 1）**：原先 `MemoryAdvisor` 的类注释
+   把对策写成"存指针不存内容 **+ 读取时按实况信封过滤**"，而后者当时还没做，两半只落地了一半。
+   现在两半都落地了 —— 写入侧 `MemoryWriteGuard` 给每轮算 `clearance_level`，
+   读取侧 `ChatMemoryService` 按**本轮实况信封**过滤，`MessageChatMemoryAdvisor` 造成的旁路已堵住。
+   正反两个方向都有全链路测试锁着（`L1ClearanceChainTest` 拦住 / `L1ClearanceFilterOffChainTest` 复现漏洞）。
+   仍敞开的边界：存的是**快照**，堵不住"引用的制度事后升密"，归阶段 4。详见 RAG-06 §九。
 3. **`pom.xml` 里有若干未被引用的依赖**（`jsonschema-generator`、`kryo`、`jsoup`、`itext-core`）。
    其中 `itext` 在 `RagDocumentIngestService` 注释里标注为"计划支持 pdf"，属预留，未删。

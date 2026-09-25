@@ -33,6 +33,11 @@ rag:
     window-turns: 3               # 注入最近几轮（一轮 = user + assistant 两条消息）
     max-chars-per-message: 2000   # 注入侧单条截断长度；0=不截断。仅影响 prompt，库里永远存原文
     retention-days: 30            # 留存到期(expires_at = created_at + N 天)；0=不设过期
+    # 读历史时是否按**本轮实况信封**过滤(阶段 1)：该轮内容密级 > 本轮信封密级 → 整轮不进 prompt。
+    # 关掉即退回阶段 0 的行为——降级用户仍能读到自己旧轮的高密级结论，
+    # 也就是 §一 表 #2「降级后仍可读」的漏洞现场。留着这个开关正是为了能复现它、做对比演示。
+    # ⚠️ 只关读取、不关写入：写入侧算密级是记账(没有拒绝语义)，关掉只会让库里的行"密级未知"。
+    clearance-filter-enabled: true
     # prompt 预算上限 ≈ window-turns × 2 × max-chars-per-message = 3 × 2 × 2000 = 12000 字符
   # embedding：硅基流动 SiliconFlow OpenAI 兼容接口（https://cloud.siliconflow.cn，BAAI/bge-m3 免费额度）
   # base-url 不带 /v1：Spring AI 用默认 embeddings-path=/v1/embeddings 追加，拼成 .../v1/embeddings

@@ -13,6 +13,13 @@ import java.time.LocalDateTime;
  * <p>
  * createdAt 只用于读取（插入时由数据库 {@code DEFAULT CURRENT_TIMESTAMP} 填），
  * 所以 {@link ChatMessageDao#insertTurn} 的列清单里没有它。
+ * <p>
+ * 两个权限字段职责不同，别混用：
+ * <ul>
+ *   <li>{@code clearanceLevel} —— 该轮内容可能反映的最高密级，<b>读取判定用</b>。
+ *       插入时由 {@code MemoryWriteGuard} 算好带进来</li>
+ *   <li>{@code permAuthVersion} —— 该轮写入时的权限版本，<b>仅审计</b>，不参与读取过滤</li>
+ * </ul>
  */
 public record ChatMessageRow(
         String sessionId,
@@ -25,6 +32,7 @@ public record ChatMessageRow(
         AnswerDecision answerDecision,
         String refusalReason,
         LocalDate bizDate,
+        int clearanceLevel,
         long permAuthVersion,
         LocalDateTime createdAt,
         LocalDateTime expiresAt

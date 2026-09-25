@@ -20,6 +20,11 @@ rag:
     max-query-variants: 3    # 查询变体上限（原问题恒为第 1 路，其余由术语表改写而来）
     rrf-k: 60                # RRF 平滑常数，越小则排名靠前的越占优；60 是原论文默认值
     terms-file: classpath:kb-terms.yml  # 业务术语表：员工口语 → 制度用语
+  # 输出侧 Guardrails：答案里的金额/比例/期限必须能在检索到的原文中找到出处，否则拒答。
+  # 只查这三类（不查计数/条款号/日期）是刻意的取舍：漏了只是少一道防线，误报会把正确回答拦掉。
+  guardrails:
+    numeric:
+      enabled: true   # 关掉即退回改造前行为（答案不校验直接返回），留着是为了能对比演示
   # embedding：硅基流动 SiliconFlow OpenAI 兼容接口（https://cloud.siliconflow.cn，BAAI/bge-m3 免费额度）
   # base-url 不带 /v1：Spring AI 用默认 embeddings-path=/v1/embeddings 追加，拼成 .../v1/embeddings
   embedding:

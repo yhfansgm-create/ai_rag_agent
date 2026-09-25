@@ -262,6 +262,10 @@ public class RetrievalAdvisor implements CallAdvisor, StreamAdvisor {
         sb.append("【请仅基于下列授权资料作答，禁止编造，禁止用你自己的知识补充。")
                 .append("引用资料时必须在句末标注编号，如 [1][2]。")
                 .append("资料中密级不足的代码块已隐藏为占位符，可引用其存在，但禁止编造代码内容。")
+                // 与 NumericGuardrailAdvisor 配对：这里事前约束，那里事后核对。
+                // 少了这句，模型会按口语习惯改口径（"5万元"说成"五万元整"、"年利率"换算成"月利率"），
+                // 事后校验就会把本来正确的回答拦掉 —— 用户体验是"答了又撤回"
+                .append("金额、比例、期限必须与资料原文完全一致，不得改写口径、不得换算单位。")
                 .append("若资料不足以回答，请直接回复「资料中未提及」，不要推测。】\n")
                 .append("（业务日期：").append(bizDate).append("）\n");
         if (staleCount > 0) {

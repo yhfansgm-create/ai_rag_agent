@@ -14,7 +14,7 @@ public interface UserPermissionProvider {
     /**
      * 拉取用户完整权限画像。
      *
-     * @throws SessionAuthException.Code.UNAUTHORIZED 用户不存在/被禁用
+     * @throws SessionAuthException 用户不存在/被禁用（{@link SessionAuthException.Code#UNAUTHORIZED}）
      */
     UserPermissionProfile loadProfile(String userId);
 

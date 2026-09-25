@@ -10,6 +10,31 @@
 > 阅读顺序建议：先看 §一 的全景调用链建立地图，再按 §三→§七 逐个读。
 > 每个功能都按「解决什么问题 → 改造前状态 → 代码方法表 → 设计取舍 → 单测」组织。
 
+---
+
+> ## ⚠️ 包结构变更说明（2026-09-25，本文以下正文未改）
+>
+> 代码做过一次**纯结构整理**：**类名一个都没变**，但包名和行号变了。本文正文里
+> `类名.java:行号` 形式的引用（如 `RetrievalAdvisor.java:260-289`）**行号已失效**，
+> 请以类名在 IDE 里重新定位。新包名对照：
+>
+> | 类 | 原包 | 新包 |
+> |---|---|---|
+> | `BankAssistant`、`SessionController`、`ChatRequest`、`ChatReply` | `org.agent.permission` | **`org.agent.api`** |
+> | `RetrievalAdvisor`、`QueryExpander`、`TermDictionary`、`RrfFusion`、`CodeRedactor` | `org.agent.rag` | **`org.agent.rag.retrieve`** |
+> | `RagDocumentIngestService`、`DocMetadataParser` 等 7 个 | `org.agent.rag` | **`org.agent.rag.ingest`** |
+> | `NumericExtractor`、`NumericConsistencyChecker`、`NumericGuardrailAdvisor` | `org.agent.rag` | **`org.agent.rag.guard`** |
+> | `RagVectorStoreConfig` / `KbController` | `org.agent.rag` | **`org.agent.rag.config`** / **`.web`** |
+> | `TemporalGate` | `org.agent.rag` | 不变（入库/检索共用，留在 `rag` 根） |
+> | `LoveApp`、`RagApp` | `org.agent.App` | **`org.agent.playground`** |
+> | `MyLoggerAdvisor`、`ReReadingAdvisor` | `org.agent.advisor` | **已删除**（全项目零引用） |
+>
+> **另修正一处正文事实错误**：§一 等处的 `POST /api/session/chat`、`POST /api/kb/ingest`
+> 里的 `/api` 前缀**不存在**（项目未配置 `server.servlet.context-path`），
+> 实际路由是 `/session/chat` 与 `/kb/ingest`，端口 8123。
+>
+> 结构总图与阅读顺序见根目录 `README.md`；每个包的分工见各自的 `package-info.java`。
+
 ## 一、先看全景：一次对话的完整调用链
 
 ```
@@ -338,7 +363,7 @@ rag:
     dir: ./kb-test-data/version-demo     # 两版同名制度（DOC-VER-DEMO-001，v1.2 与 v2.0）
 
 # 2. 入库，看返回体
-curl -X POST http://localhost:8080/api/kb/ingest
+curl -X POST http://localhost:8123/kb/ingest     # 端口 8123，且无 /api 前缀（原文写 8080/api 是错的）
 # → superseded: ["DOC-VER-DEMO-001（version=1.2）→ 已被 version=2.0 取代，推导失效日 2024-12-31"]
 
 # 3. 问"大额取款多少需要授权" → 只应命中 v2.0 的"10 万元 / 双人授权"

@@ -85,8 +85,8 @@
   → 通过: 把 accessFilter(metadata filter DSL) + envelope 写入 ChatClient context
 ```
 
-- **建会话** `POST /api/session` `{userId}` → 从 IAM 拉画像快照入库，返回 `sessionId` + `sessionToken`（表中只存 SHA-256）。
-- **对话** `POST /api/session/chat` `{sessionId, sessionToken, message}` → 过 PermissionAdvisor，非法请求 401/403。
+- **建会话** `POST /session` `{userId}` → 从 IAM 拉画像快照入库，返回 `sessionId` + `sessionToken`（表中只存 SHA-256）。
+- **对话** `POST /session/chat` `{sessionId, sessionToken, message}` → 过 PermissionAdvisor，非法请求 401/403。
 - **权限来源**：`MockUserPermissionProvider`（内置 10086 柜员 / 10087 风控；`bumpAuthVersion()` 模拟权限变更）。接真实 IAM 时实现 `UserPermissionProvider` 接口即可，业务代码零改动。
 - **检索层消费**：真正做 RAG 时，检索 advisor 从 context 读 `org.agent.permission.accessFilter`，
   下推给向量库 `SearchRequest.builder().query(q).filterExpression(accessFilter)` —— 数据锁在检索层执行，不是查完再前端过滤。

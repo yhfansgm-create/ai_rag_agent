@@ -1,6 +1,6 @@
 # 测试用途：manifest 入库路径 + 子目录 file 路径解析 + 非 markdown 整篇一段
 # 使用方法：将本文件及 referenced/ 目录拷贝到 rag.kb.dir 下（默认 ./kb），
-#           再调用 POST /api/kb/ingest 即可验证 manifest 入库链路。
+#           再调用 POST /kb/ingest 即可验证 manifest 入库链路。
 # 注意：kb_dir 下同时存在 .md 与 manifest 时，两者都会被 ingestDir 扫描，
 #       .md 走 front-matter 解析，manifest 走本清单。
 documents:

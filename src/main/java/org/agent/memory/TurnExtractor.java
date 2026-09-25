@@ -4,7 +4,8 @@ import org.agent.memory.model.AnswerDecision;
 import org.agent.memory.model.CitedChunkRef;
 import org.agent.memory.model.TurnFacts;
 import org.agent.permission.SessionEnvelope;
-import org.agent.rag.RetrievalAdvisor;
+import org.agent.rag.retrieve.RetrievalAdvisor;
+import org.agent.support.Texts;
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
 import org.springframework.ai.document.Document;
@@ -57,7 +58,7 @@ public final class TurnExtractor {
                 RetrievalAdvisor.bizDate(originalRequest),
                 envelope.authVersion(),
                 userMessage(originalRequest),
-                answerText(response),
+                Texts.answerText(response),
                 reason == null ? AnswerDecision.PROCEED : AnswerDecision.REFUSED,
                 reason,
                 CitedChunkRef.fromDocuments(retrievedDocs(response)));
@@ -91,16 +92,6 @@ public final class TurnExtractor {
             return null;
         }
         return request.prompt().getUserMessage().getText();
-    }
-
-    /** 逐层判空，与 {@code NumericGuardrailAdvisor.answerText} 同样的写法 */
-    private static String answerText(ChatClientResponse response) {
-        if (response == null || response.chatResponse() == null
-                || response.chatResponse().getResult() == null) {
-            return null;
-        }
-        var output = response.chatResponse().getResult().getOutput();
-        return output == null ? null : output.getText();
     }
 
     private static Object contextValue(ChatClientResponse response, String key) {

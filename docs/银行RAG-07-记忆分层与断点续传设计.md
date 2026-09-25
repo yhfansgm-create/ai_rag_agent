@@ -10,6 +10,24 @@
 >
 > 本文回答三个问题：**记忆怎么分层**（§二）、**记忆怎么不越权 / 坏了怎么收拾**（§三、§四）、**任务断了怎么从最省时间的点续上**（§五）。
 
+> ## ⚠️ 状态与包结构的更新（2026-09-25）
+>
+> **① 状态已变：L1 情景记忆已实现**，上表"已设计 · 未实现"已过时。
+> 落地代码在 `org.agent.memory`（`MemoryAdvisor` + `ChatMemoryService` + `TurnExtractor`
+> + `dao/ChatMessageDao`），表结构见 `sql/chat_message.sql`，开关是 `rag.memory.enabled`。
+> 本文 §二 的 L1 部分已部分落地；**L0 / L2 与"按权限过滤读取"仍属未实现**
+> （`ChatMemoryService` 注释明确标注为「阶段 1」交付物）。
+> 按本文自己的约定，落地完的章节应迁去 RAG-06 并从 RAG-04 划掉 —— 这一步还没做。
+>
+> **② 包结构变更**：本文正文里 `类名.java:行号` 形式的引用（如 `BankAssistant.java:45-57`、
+> `RetrievalAdvisor.java:260-289`）**行号已失效**，类名未变。主要变化：
+> `BankAssistant` 由 `org.agent.permission` 移入 **`org.agent.api`**；
+> `RetrievalAdvisor` 由 `org.agent.rag` 移入 **`org.agent.rag.retrieve`**。
+> 完整对照见 RAG-06 开头的「包结构变更说明」。
+>
+> **③ 一处修正**：§一 等处的 `POST /api/session/chat` 的 `/api` 前缀不存在，
+> 实际是 `/session/chat`（端口 8123）。
+
 ---
 
 ## 一、为什么现在做：先说清缺口

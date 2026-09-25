@@ -1,6 +1,27 @@
 # 项目进度
 
-> 更新于 2026-09-15。设计背景见 `docs/`，关键决策与踩坑原因已写进相关代码注释。
+> 更新于 2026-09-25。设计背景见 `docs/`，关键决策与踩坑原因已写进相关代码注释。
+
+## 代码结构（2026-09-25 重整，纯结构调整、无行为变更）
+
+包结构按职责重排，依赖方向改为**严格单向**，并补上了代码地图：
+
+- 应用层从 `permission` 拆出为 **`org.agent.api`**（`BankAssistant` + `SessionController` + 对话 DTO）
+  —— 原先把门面和 Controller 放在 `permission` 里，造成了 `permission ↔ rag`、
+  `permission ↔ memory` 两个**循环依赖**，拆开后成环问题消失
+- `org.agent.rag` 由 20 个类平铺拆为 **`ingest/` · `retrieve/` · `guard/` · `config/` · `web/`**；
+  `TemporalGate` 因入库/检索共用，留在 `rag` 根
+- `org.agent.App` → **`org.agent.playground`**（包名大写违反 Java 约定，且与生产代码混在一起）
+- 删除 **`org.agent.advisor`**（`MyLoggerAdvisor` / `ReReadingAdvisor` 全项目零引用的教程残留）
+- 新增 **`org.agent.support`**（合并 3 份逐字相同的 `answerText` + 2 份 `str`）
+- 每个包新增 `package-info.java` 作为代码地图；根目录新增 `README.md` 含**学习路径**
+- 测试包同步镜像主包结构（包级私有成员被单测访问，包位置必须对齐）
+
+**验证**：重构前后跑同一命令，均为 `Tests run: 196, Failures: 0, Errors: 0`。
+命令：`mvn test -Dtest='!PermissionModuleContextTest,!ChatMessageDaoContextTest,!RagAppTest,!LoveAppTest'`
+
+> ⚠️ 若从旧版本升级，注意**类名全部未变、只是包名变了**，但 `docs/银行RAG-06`、`07` 里引用的
+> `类名.java:行号` 已失效。
 
 ## 状态：RAG 入库链路已打通
 
@@ -31,15 +52,15 @@
    阿里云控制台授不到这个权限（账号管理只到「读写」）。
    **解法：用该账号自带的 `CREATEDB` 属性自建库 `rag_kb`** —— 创建者即 owner，权限自足。
 
-3. **`initializeSchema` 必须显式设 `true`**（`RagVectorStoreConfig`）。
+3. **`initializeSchema` 必须显式设 `true`**（`rag/config/RagVectorStoreConfig`）。
    Spring AI 1.0.0 经 builder 构建时该值为 `false`，不设会静默跳过建表，
    日志只有一行 `Skipping the schema initialization for the table`，共排查成本很高。
 
 ## 已修的 bug（均无测试覆盖，见待办）
 
-- `RagDocumentIngestService`：chunk id 原是 `docId@version#n`，但 PGVector 的 id 列是 UUID
+- `rag/ingest/RagDocumentIngestService`：chunk id 原是 `docId@version#n`，但 PGVector 的 id 列是 UUID
   → 改为 `UUID.nameUUIDFromBytes` 派生确定性 UUID（保持重复入库幂等）
-- `DocMetadataParser.dateOf`：SnakeYAML 把不加引号的日期解析成 `java.util.Date`，
+- `rag/ingest/DocMetadataParser.dateOf`：SnakeYAML 把不加引号的日期解析成 `java.util.Date`，
   `String.valueOf` 后 `LocalDate.parse` 必崩 → 增加 Date 分支
 
 ## 工具

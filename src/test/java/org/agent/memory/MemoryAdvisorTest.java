@@ -6,7 +6,7 @@ import org.agent.memory.model.TurnFacts;
 import org.agent.memory.service.ChatMemoryService;
 import org.agent.permission.PermissionAdvisor;
 import org.agent.permission.SessionEnvelope;
-import org.agent.rag.RetrievalAdvisor;
+import org.agent.rag.retrieve.RetrievalAdvisor;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;

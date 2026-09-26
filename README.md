@@ -53,16 +53,17 @@ open http://localhost:8123/swagger-ui.html
 ### 跑测试
 
 ```bash
-# 只跑纯单测：196 个，不需要任何数据库/网络
-mvn test -Dtest='!PermissionModuleContextTest,!ChatMessageDaoContextTest,!RagAppTest,!LoveAppTest'
+# 纯单测（不需要任何数据库/网络）
+mvn test -Dtest='!*ContextTest,!*ChainTest,!RagAppTest,!LoveAppTest'
 
-# 全量（需要 MySQL 在跑；RagAppTest 还需 PG + embedding）
+# 全量：538 个用例（需要 MySQL 在跑；RagAppTest 还需 PG + embedding）
 mvn test
 ```
 
-被排除的 4 个是仅有的需要真基础设施的测试：`PermissionModuleContextTest` 与
-`ChatMessageDaoContextTest` 要 MySQL，`RagAppTest` 要 PG + embedding 网络，
-`LoveAppTest` 由 `DEEPSEEK_API_KEY` 守卫、未配置时自跳过。
+需要真基础设施的只有三类，用通配符排除比列举类名省事（这类测试还在增加）：
+`*ContextTest`（DAO 的列映射/约束，要 MySQL）、`*ChainTest`（全链路打桩，要 MySQL）、
+`RagAppTest`（要 PG + embedding 网络）。`LoveAppTest` 由 `DEEPSEEK_API_KEY` 守卫、
+未配置时自跳过（全量里那 2 个 skipped 就是它）。
 
 ---
 
@@ -81,13 +82,20 @@ org.agent
 │   ├── retrieve/                 查询扩展 → 多路召回 → 融合 → 两层门禁 → 拼引用
 │   ├── guard/                    答案里的数字回原文核验
 │   ├── config/  web/             向量库装配 / 入库路由
-├── memory/                       L1 情景记忆（读窗口 + 写一轮 + 按本轮实况信封过滤密级）
+├── memory/                       记忆层：L1 情景记忆（会话内最近 N 轮）+ L2 语义记忆（跨会话事实）
+│   │                              + 会话摘要（滑出窗口的定位块）+ 哈希链审计写入
+│   ├── model/ distill/ service/ config/ dao/   词表与读侧模型 / 两个 seam 接口与 LLM 实现 /
+│   │                                            策略出口与事务边界 / executor 与配置 / 三张新表的 DAO
+├── audit/                        通用哈希链（append-only 审计，**不依赖 memory**，供 RAG-04 #13 复用）
+├── config/                       全局装配决定：**两套数据源谁做主**（业务库标 @Primary）
 └── playground/                   学习与评测工具，不在主链路上
 ```
 
 **依赖方向严格单向**：`api → {permission, rag, memory}`，`rag.* → permission`，
-`memory → {permission, rag.retrieve}`，`permission` 是底座。这是刻意维持的 ——
-成环之后"谁能改谁"就没有答案了。
+`memory → {permission, rag.retrieve, audit}`，`audit → 无`（纯函数，谁都不依赖），
+`permission` 是底座。这是刻意维持的 —— 成环之后"谁能改谁"就没有答案了。
+`audit` 之所以单独成包，就是为了让 RAG-04 #13（审计查询接口）能直接复用它，
+而不用从记忆模块里把哈希链抠出来。
 
 每个包都有 `package-info.java`，在 IDE 里点开包名就能看到该包**负责什么 / 不负责什么 /
 被谁依赖 / 从哪个类开始读**，以及那些"看着位置奇怪其实有原因"的类为什么在那儿。
@@ -173,7 +181,7 @@ HTML 版的好处是**能全局搜**、能看到继承树和"被谁引用"；读
 | [银行RAG-04 待做功能优先级](docs/银行RAG-04-待做功能优先级.md) | **未做** | 会频繁变动，做完一个划掉一个 |
 | [银行RAG-05 平台内核与场景特化](docs/银行RAG-05-平台内核与场景特化.md) | 背景 | 哪些能套用、哪些不能 |
 | [银行RAG-06 已实现功能导览](docs/银行RAG-06-已实现功能导览.md) | **已做** | 复习提纲，只增不改 |
-| [银行RAG-07 记忆分层与断点续传设计](docs/银行RAG-07-记忆分层与断点续传设计.md) | **已设计·部分实现** | 实现完的章节迁去 06 |
+| [银行RAG-07 记忆分层与断点续传设计](docs/银行RAG-07-记忆分层与断点续传设计.md) | **已设计·大部分实现** | 实现完的章节迁去 06。已落地：L1（阶段 0/1）、L2（阶段 2）、会话摘要（§5.5）；未落地：阶段 3a/3b 断点续传、阶段 4 治理 |
 
 ---
 
@@ -189,5 +197,16 @@ HTML 版的好处是**能全局搜**、能看到继承树和"被谁引用"；读
    读取侧 `ChatMemoryService` 按**本轮实况信封**过滤，`MessageChatMemoryAdvisor` 造成的旁路已堵住。
    正反两个方向都有全链路测试锁着（`L1ClearanceChainTest` 拦住 / `L1ClearanceFilterOffChainTest` 复现漏洞）。
    仍敞开的边界：存的是**快照**，堵不住"引用的制度事后升密"，归阶段 4。详见 RAG-06 §九。
-3. **`pom.xml` 里有若干未被引用的依赖**（`jsonschema-generator`、`kryo`、`jsoup`、`itext-core`）。
+3. **`pom.xml` 里有若干未被引用的依赖**（`kryo`、`jsoup`、`itext-core`；
+   ~~`jsonschema-generator`~~ ✅ **已被用上**：阶段 2 的 `LlmFactDistiller` / `LlmSummaryWriter`
+   通过 `.call().entity(...)` 做结构化输出，走的就是它 —— 所以那条"未引用"的判断已过期）。
    其中 `itext` 在 `RagDocumentIngestService` 注释里标注为"计划支持 pdf"，属预留，未删。
+4. ~~**`local` profile 下跑起来的应用演示不了记忆功能**~~ ✅ **已修**：`RagVectorStoreConfig`
+   的 `ragVectorDataSource` 是个用户定义的 `DataSource` bean，会让 `DataSourceAutoConfiguration`
+   整体退让 ⇒ `spring.datasource.*`（MySQL）被忽略、**MyBatis 绑到 PG**。之所以测试全绿也看不见，
+   是因为每个上下文测试都设了 `rag.vectorstore.enabled=false` —— 测试与"跑起来的应用"不是同一套装配。
+   修法：`org.agent.config.DataSourceConfig` 显式声明业务库并标 `@Primary`（MyBatis /
+   `JdbcTemplate` / 事务管理器三个的判据都是 `@ConditionalOnSingleCandidate`，靠它选主），
+   向量库那一侧的消费方写死 `@Qualifier("ragVectorDataSource")`。
+   `DataSourceWiringTest` **离线**锁住这条装配：摘掉 `@Primary` 它立刻报
+   `NoUniqueBeanDefinitionException`（已实测）。

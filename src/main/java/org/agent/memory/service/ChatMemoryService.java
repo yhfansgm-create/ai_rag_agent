@@ -47,7 +47,16 @@ import java.util.Map;
  *       一个是"这轮内容有多敏感"（选尺子）</li>
  *   <li><b>没有复用 {@code SessionAuthService.buildAccessFilter}</b>。那个 filter 是给向量召回用的
  *       （{@code kb_id in [...] && doc_level <= N && org_codes in [...]}），
- *       而 L1 是"按 session_id 结构化查询"，两者不是一回事。阶段 2 做 L2 语义记忆时才该复用它。</li>
+ *       而 L1 是"按 session_id 结构化查询"，两者不是一回事。
+ *       <p>
+ *       ⚠️ <b>阶段 2 落地后的修正</b>：本行原先写的是"阶段 2 做 L2 语义记忆时才该复用它"，
+ *       而那件事已经做了 —— 结论是<b>复用的是它「信封驱动、单一出口」的<u>口径</u>，
+ *       不是那段字符串</b>。理由是 {@code kb_id} / {@code doc_level} / {@code org_codes}
+ *       三项在记忆行上<b>没有对应物</b>，而那个 filter 是 PGvector 的 filter DSL，
+ *       L2 走的是 MySQL（见 {@code SemanticMemoryService} 的类注释）。
+ *       所以 L2 读侧照抄了这条原则（判定依据只许来自本轮实况信封、且只有一个出口方法），
+ *       实现另写。留着这句原话不改，文档就会自相矛盾 ——
+ *       这与阶段 1 在 {@code min}/{@code max} 上踩过的是同一类问题。</li>
  *   <li><b>没有把密级条件写进 SQL 的 WHERE</b> —— 理由见 {@link #loadRecentTurns} 的说明</li>
  *   <li><b>没有吞异常</b>。DAO / JSON 解析失败一律向上抛，由 {@code MemoryAdvisor} 统一兜。
  *       隔离边界只有一处才好审计，也让本类的单测能干净地断言"抛出来了"而不是"被吞了"。</li>
@@ -128,8 +137,28 @@ public class ChatMemoryService {
      * turn_no 在这里生成（会话内 {@code MAX + 1}）而不是在抽取侧 —— 它是存储细节，
      * 抽取方不该操心。并发下可能撞号，被唯一键拒掉后由上层失败隔离吞掉，
      * 详细取舍见 {@link ChatMessageDao#selectMaxTurnNo}。
+     *
+     * <h2>为什么返回 {@code int}（阶段 2 的加性变动）</h2>
+     * L2 的<b>「无源不写」</b>要求每条记忆都指回具体某一轮的 L1 行，所以
+     * {@code SemanticMemoryService.scheduleDistill(facts, turnNo, envelope)} 需要这个轮号。
+     * 有两条路可取到它，<b>都不能用</b>：
+     * <ul>
+     *   <li>让调用方自己算 {@code selectMaxTurnNo() + 1} —— 那会把"轮号怎么来"复制成两份。
+     *       两份实现一旦漂移，记忆指向的就是<b>另一轮</b>：来源列看着有值、审计看着完整，
+     *       但指错了地方。这是"看起来正常"的坏数据，比空值危险</li>
+     *   <li>写回后再查一次 —— 多一次往返，且并发下查到的可能是别人的轮次</li>
+     * </ul>
+     * 所以让生成轮号的地方把它交出来。返回值是<b>加性</b>的：既有调用方忽略它即可，
+     * 行为逐字节不变（阶段 1 冻结的行为没有任何一处被改动）。
+     * <p>
+     * ⚠️ <b>返回值只有在插入成功之后才有意义</b>：本方法抛异常时轮号不存在，
+     * 于是调用它的地方（{@code MemoryAdvisor.appendTurnSafely}）也不会走到
+     * {@code scheduleDistill} —— 「L1 先落地、再提交 L2 蒸馏」这个顺序
+     * 就是「无源不写」的第一道防线，由<b>执行顺序</b>保证，不靠注释提醒。
+     *
+     * @return 本轮实际使用的 {@code turn_no}
      */
-    public void appendTurn(TurnFacts facts, MemoryProperties props) {
+    public int appendTurn(TurnFacts facts, MemoryProperties props) {
         int turnNo = dao.selectMaxTurnNo(facts.sessionId()) + 1;
         LocalDateTime expiresAt = props.retentionEnabled()
                 ? LocalDateTime.now().plusDays(props.retentionDays())
@@ -140,6 +169,7 @@ public class ChatMemoryService {
         dao.insertTurn(List.of(
                 row(facts, turnNo, ROLE_USER, facts.userMessage(), null, null, expiresAt),
                 row(facts, turnNo, ROLE_ASSISTANT, null, facts.answerText(), refsJson, expiresAt)));
+        return turnNo;
     }
 
     /**

@@ -41,10 +41,18 @@ class ChatMessageDaoContextTest {
     private ChatMessageDao dao;
 
     /**
-     * 只用来验证"漏写 clearance_level 时数据库给什么"。这里拿到的是 MySQL 那个
-     * {@code JdbcTemplate}：{@code RagVectorStoreConfig} 里的 PG 连接是内联
-     * {@code new JdbcTemplate(...)}、并没有暴露成 bean，所以自动配置照常为
-     * {@code spring.datasource} 配一个。
+     * 只用来验证「漏写 clearance_level 时数据库给什么」。这里拿到的必须是 **MySQL** 那个
+     * {@code JdbcTemplate}。
+     * <p>
+     * ⚠️ 曾经这里写的是「{@code RagVectorStoreConfig} 里的 PG 连接是内联 {@code new JdbcTemplate(...)}、
+     * 并没有暴露成 bean，所以自动配置照常为 {@code spring.datasource} 配一个」—— 那是**照着推断写的，
+     * 而且推断错了**：那个 PG 连接确实是个 {@code DataSource} bean，探针打出过
+     * {@code PROBE-DS=[ragVectorDataSource]}、{@code PROBE-URL=jdbc:postgresql://…/rag_kb}。
+     * 真实情况是「用户在，自动配置就整体退让」，本测试能拿到 MySQL 是因为它显式关掉了 vectorstore。
+     * <p>
+     * 现在无论开关怎么拨，这里都会拿到 MySQL：业务库已在
+     * {@code org.agent.config.DataSourceConfig} 里显式声明并标了 {@code @Primary}。
+     * 开关仍然关着 —— 本测试只覆盖记忆表，不该顺带要求一个活着的 PG。
      */
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -172,6 +180,58 @@ class ChatMessageDaoContextTest {
 
         assertThat(rows).hasSize(1);
         assertThat(rows.get(0).clearanceLevel()).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("区间查询：只取该轮号区间，按轮号升序、轮内 user 在前（会话压缩的输入）")
+    void selectTurnRangeTakesExactlyTheRange() {
+        String sid = UUID.randomUUID().toString();
+        for (int turn = 1; turn <= 5; turn++) {
+            dao.insertTurn(List.of(userRow(sid, turn, AnswerDecision.PROCEED),
+                    assistantRow(sid, turn, AnswerDecision.PROCEED)));
+        }
+
+        // 只取第 2、3 轮 —— 两端的 1 与 4、5 都不能出现（区间是闭区间）
+        List<ChatMessageRow> rows = dao.selectTurnRange(sid, 2, 3);
+
+        assertThat(rows).extracting(ChatMessageRow::turnNo).containsExactly(2, 2, 3, 3);
+        // ⚠️ 升序，与 selectRecentTurns 的倒序**相反**：压缩要按时间顺序读
+        assertThat(rows).extracting(ChatMessageRow::role)
+                .containsExactly("user", "assistant", "user", "assistant");
+        assertThat(rows.get(0).userMessage()).isEqualTo("第2轮提问");
+        assertThat(rows.get(1).answerText()).isEqualTo("第2轮回答");
+    }
+
+    @Test
+    @DisplayName("区间查询：拒答轮照样返回（压缩与「进不进 prompt」是两套口径）")
+    void selectTurnRangeKeepsRefusedTurns() {
+        String sid = UUID.randomUUID().toString();
+        dao.insertTurn(List.of(userRow(sid, 1, AnswerDecision.REFUSED),
+                assistantRow(sid, 1, AnswerDecision.REFUSED)));
+
+        // ⚠️ 与 loadRecentTurns 的关键差别：那边拒答轮整轮丢弃，这边必须拿到它 ——
+        // 「用户问了 XX 未获答复」是下一轮"那它呢"唯一的定位线索，
+        // 只是答案文案不给压缩器（见 CompactionRequest.SourceTurn）
+        List<ChatMessageRow> rows = dao.selectTurnRange(sid, 1, 1);
+
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(0).answerDecision()).isEqualTo(AnswerDecision.REFUSED);
+    }
+
+    @Test
+    @DisplayName("区间查询：from > through 返回空（不报错），且不会漏到别的会话去")
+    void selectTurnRangeEmptyRangeAndOtherSessions() {
+        String sid = UUID.randomUUID().toString();
+        String other = UUID.randomUUID().toString();
+        dao.insertTurn(List.of(userRow(sid, 1, AnswerDecision.PROCEED),
+                assistantRow(sid, 1, AnswerDecision.PROCEED)));
+        dao.insertTurn(List.of(userRow(other, 2, AnswerDecision.PROCEED),
+                assistantRow(other, 2, AnswerDecision.PROCEED)));
+
+        assertThat(dao.selectTurnRange(sid, 3, 2)).as("空区间").isEmpty();
+        // other 会话的第 2 轮不能被这个区间捞到（会话范围由 SQL 限定，不是靠 Java 过滤）
+        assertThat(dao.selectTurnRange(sid, 1, 5)).as("只含本会话")
+                .extracting(ChatMessageRow::sessionId).containsOnly(sid);
     }
 
     // ------------------------------------------------------------------

@@ -39,6 +39,44 @@ rag:
     # ⚠️ 只关读取、不关写入：写入侧算密级是记账(没有拒绝语义)，关掉只会让库里的行"密级未知"。
     clearance-filter-enabled: true
     # prompt 预算上限 ≈ window-turns × 2 × max-chars-per-message = 3 × 2 × 2000 = 12000 字符
+    # ------------------------------------------------------------------
+    # L2 语义记忆（跨会话的稳定事实）
+    # 设计取舍见《银行RAG-07》§A.2/§A.3/§四；表结构见 sql/user_memory.sql、sql/memory_change_log.sql。
+    # ⚠️ 与上面的 L1 开关**互相独立**：可以只留 L1（关掉本段 = 阶段 1 的行为），
+    #    但反过来不成立——L1 关掉时 L2 一定不写，因为它拿不到本轮轮号（无源不写）。
+    semantic:
+      enabled: true                 # 关掉即退回「只记得住本会话」，用来做对比演示
+      # 复述验证（阶段 2 的安全核心）：候选事实必须能在**该轮用户原话**里找到要素支撑。
+      # 关掉即复现漏洞现场——模型**推测**出的假事实也会落库：用户只是在问
+      # 「大额存单利率多少」，模型就会把「偏好产品=大额存单」当成事实记下来。
+      # 这个开关的用途与上面的 clearance-filter-enabled 逐字对应：**能关掉一个防护，
+      # 才证明那个防护真的在起作用**（见 L2GroundingOffChainTest）。
+      grounding-enabled: true
+      quota-per-user: 200           # 每用户有效事实上限；到顶只拒**新增**，改口/续期不受限
+      recall-limit: 10             # 每轮最多取回几条候选(不是最终注入条数——信封与过期还要再滤)
+      max-facts-per-block: 10       # 注入区块最多渲染几条
+      max-line-chars: 80            # 单条事实行长上限，超了**整条丢弃**（腰斩的值是假事实）
+      max-block-chars: 800          # 事实块整块字符上限（含声明），超了从尾部整条丢
+      # ↓ 这两个是**蒸馏线程池**的参数，会话压缩用的是**同一个池**（一个池只有一个容量）
+      distill-threads: 2            # 一次蒸馏 = 一次秒级 LLM 往返；队列满按「拒绝 + 打 WARN」处理
+      distill-queue-capacity: 200
+    # ------------------------------------------------------------------
+    # 会话摘要/压缩（RAG-07 §5.5）：把滑出窗口的那段历史压成**定位**信息
+    # 设计取舍见 §5.5 与附录 A1；表结构见 sql/session_summary.sql。
+    # ⚠️ A1 把「把摘要当成解法」列为**已知偏差**，校正结论是「摘要只能用来定位、不能承载事实」——
+    #    所以摘要里出现金额/比例/期限会被 Java 侧打回重写，仍违规就**整份丢弃**
+    #    （宁可让窗口滑走，也不让「1.35% → 讨论了存款利率」这种损失进入未来所有轮次的上下文）。
+    summary:
+      enabled: true                 # 关掉 = L1 退回硬滑窗，「第 3 轮以前整段消失」可现场复现
+      max-summary-chars: 600        # 一份摘要的字符上限；超了**丢弃整份**而不是截断
+      budget-chars: 8000            # 上下文预算(字符数，classpath 上没有 tokenizer)。是**预算**不是计费数字
+      # §5.5 的 token 规则。⚠️ 本阶段**只做观测**：超了只打一条 WARN，不触发再压缩——
+      # 那条规则是为恢复场景写的，而我们的窗口是连续滑动的（压的也是已经滑出去的内容，
+      # 压完体积不会变小）。真正生效的触发是「有轮次滑出窗口且未被摘要覆盖」，见 SessionSummaryService。
+      trigger-ratio: 0.7
+      # 单轮送进压缩器的文本上限，按**每条消息**算（所以一轮最多 2×）
+      source-turn-max-chars: 500
+      retention-days: 30            # 摘要保质期；与 L1 的 retention-days 同口径但互相独立
   # embedding：硅基流动 SiliconFlow OpenAI 兼容接口（https://cloud.siliconflow.cn，BAAI/bge-m3 免费额度）
   # base-url 不带 /v1：Spring AI 用默认 embeddings-path=/v1/embeddings 追加，拼成 .../v1/embeddings
   embedding:

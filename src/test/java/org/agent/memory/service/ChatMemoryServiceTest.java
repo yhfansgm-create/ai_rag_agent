@@ -149,15 +149,20 @@ class ChatMemoryServiceTest {
     // ------------------------------------------------------------------
 
     @Test
-    @DisplayName("写回：空会话写 turn_no=1，已有 4 轮则写 5")
+    @DisplayName("写回：空会话写 turn_no=1，已有 4 轮则写 5；**返回值就是落库的那个轮号**")
     void turnNoIsMaxPlusOne() {
         when(dao.selectMaxTurnNo(SID)).thenReturn(0);
-        service().appendTurn(facts(AnswerDecision.PROCEED, null), PROPS);
+        int first = service().appendTurn(facts(AnswerDecision.PROCEED, null), PROPS);
         assertThat(capturedRows().get(0).turnNo()).isEqualTo(1);
+        // ⚠️ 这条断言是 L2 的「无源不写」所依赖的契约：返回值必须**等于**真正落库的轮号，
+        //    而不是"调用方自己算的 +1"。两者一旦漂移，记忆的来源列看着有值却指向另一轮 ——
+        //    那是"看起来正常"的坏数据，比空值危险
+        assertThat(first).isEqualTo(1);
 
         when(dao.selectMaxTurnNo(SID)).thenReturn(4);
-        service().appendTurn(facts(AnswerDecision.PROCEED, null), PROPS);
+        int second = service().appendTurn(facts(AnswerDecision.PROCEED, null), PROPS);
         assertThat(capturedRows().get(0).turnNo()).isEqualTo(5);
+        assertThat(second).isEqualTo(5);
     }
 
     @Test

@@ -44,6 +44,11 @@
 
 ## 一、为什么现在做：先说清缺口
 
+> ⚠️ **本节记录的是立项时（2026-09-23）的状态，不是现状。** 下面三条缺口现在都已填上：
+> ① 主链路已接 `MemoryAdvisor`（L1，阶段 0）；② 记忆由我们自己实现，不用 `MessageChatMemoryAdvisor`；
+> ③ 那个"记忆 advisor"来了，且 L2（阶段 2）与会话摘要（§5.5）也已落地 —— 见 §六 路线图与 RAG-06 §八–§十一。
+> **本节保留作缺口记录**：它说明了"为什么这件事值得做"，而结论（§一 的核心论点）至今仍然成立。
+
 ### 缺口不是"体验不好"，是"设计意图与实现之间空着一块"
 
 三件事凑在一起，说明记忆层是**被规划过、但从未落地**的：
@@ -217,6 +222,11 @@
 ---
 
 ### L2 · 语义记忆 —— 唯一需要"加工"的一层
+
+> ✅ **已落地（2026-09-26，阶段 2）**，见 RAG-06 §十。落地时的一个必要修正：
+> 下面的 `fact_key` 例子（`"常用机构"`）**存中文标签是不可行的** —— 它活在提示词里，
+> 一旦有人改词，旧行就变孤儿且 supersede **静默失效**。落地版存 **ASCII code**（`preferred_org`），
+> 展示文本由 `FactKey.label()` 提供。另外 `scope` 只产生 `USER`（DEPT 只有读分支，无自动写入路径）。
 
 **存什么**：从多轮对话中蒸馏出的稳定事实，而不是对话本身。
 
@@ -438,6 +448,30 @@ memoryFilter = existingAccessFilter
 
 ### 纠正：supersede，不要 delete
 
+> ### ✅ 已落地（2026-09-26）+ 一条本文原来**没说透**的结论（补在下面）
+>
+> **结论：`status` 不承载 supersede 语义。** 本文 A.2 的 `status` 枚举注释把 `STALE` 写成
+> 「所依制度已废止」，而下面「巡检②」的判据写的是 `valid_to IS NULL` —— 两处合起来指向同一件事：
+>
+> | 列 | 回答的问题 | 谁写 |
+> |---|---|---|
+> | `valid_to` | 「**历史上**它何时为真」（真值区间） | 被新事实取代时，系统写 |
+> | `expires_at` | 「到什么时候我还可以**不问就信**」（怀疑标记） | 写入时按 TTL 预算 |
+> | `status` | 「这条记忆的**生命周期 / 健康度**」 | 巡检（`STALE`）、用户（`USER_DELETED`） |
+>
+> **所以被 supersede 掉的行留 `ACTIVE`** —— 它是「不再当前」，不是「坏」。
+> 给 `STALE` 塞第二个含义会**直接破坏**巡检①：那是给"所依制度已废止"预留的处置动作，
+> 混进 supersede 之后，巡检① 就没法用 `status` 表达它的结论了。
+>
+> **风险与对策**（这条一定要讲，否则是个真陷阱）：将来有人写 `WHERE status='ACTIVE'`
+> 会把**被取代的历史行全部复活**。对策是 DAO **不提供任何只按 `status` 筛的通用查询**
+> （与 `ChatMessageDao`「不提供按权限字段过滤的查询」同一手法）+ 列注释写明 + 一条测试锁住。
+> **DB 级加固**：生成列 `active_key = IF(valid_to IS NULL, fact_key, NULL)`
+> + `UNIQUE KEY uk_owner_active (owner_id, scope, active_key)` ——
+> 唯一索引对 NULL 不生效，所以必须把「有效」**压成非 NULL 值**才能被约束。
+> 这把"同一 `(owner, scope, fact_key)` 至多一条有效行"从 Java 层不变量落成了 DB 约束。
+
+
 用户改口时（"我上周说主要做对公，其实我现在转对私了"）：
 
 ```
@@ -479,6 +513,18 @@ memory_change_log: {memory_id, action, before_json, after_json, actor, reason, p
 ```
 
 `prev_hash` 指向上一条的 `hash`。这和 RAG-04 原 #13「审计表 + 哈希链」是**同一个机制，同一个理由**——防篡改。建议**直接复用那张表的实现**，不要各写一套。
+
+> ### ✅ 已落地（2026-09-26）：这条建议被照做了
+>
+> 哈希链建成了**通用纯函数** `org.agent.audit.AuditHashChain`（`hash` / `verify` / 规范化 JSON），
+> **刻意不依赖记忆模块** —— 所以 RAG-04 #13 将来接审计查询接口时可以直接复用，
+> 不必从记忆模块里把它抠出来。可以说 **#13 的底层实现已经就位，只差消费方**。
+>
+> 落地时的**四处偏离**，都在附录 A.3 的「落地说明」里（`memory_id` → `fact_uid`、
+> 新增 `entity_type`、`createdAt` 由 Java 提供、JSON 规范化后哈希）。
+> 另外实测到一个反直觉的结论：**本库里"全链校验为空"永远不可能成立**（审计表是全库共享的
+> append-only 表，而 DAO 的列映射测试会故意写进假哈希）—— 所以校验断言只能做成
+> 「相对参照点」的形式。这条记在 RAG-06 §十，写共享表断言时会再遇到。
 
 ### 巡检：三类自动检测
 
@@ -663,6 +709,31 @@ boolean stillValid(TaskStep s, SessionEnvelope now) {
 
 **摘要（compaction）的触发策略**：按 token 数触发（比如超过窗口 60%）而不是按轮数，因为一轮的长度差异极大（一条"你好"和一段粘贴的报表）。
 
+> ### ✅ 本节已落地（2026-09-26），**但触发策略有一处明确偏离**
+>
+> 摘要表与压缩管线已实现，见 RAG-06 §十一 与**新增的附录 A.4**。上面那条「恢复给模型的上下文」
+> 的构成也照实现了 —— 只是**目前只由 `MemoryAdvisor` 常驻消费**（每轮都读），
+> 而不是在"会话恢复"这一刻才拼。
+>
+> **偏离：主触发不是 token 规则，而是「按轮次滑出窗口」。**
+> 本节写的 token 触发是**为恢复场景**设想的（会话暂停后重新拉起，攒了一大段历史一次性压）。
+> 而本项目的窗口是**连续滑动**的：`window-turns: 3` ⇒ 只取最近 6 行，第 4 轮之后第 1 轮就滑出去了 ——
+> 也就是说**不需要等到"恢复"那一刻，上下文已经在每轮悄悄丢东西了**。所以：
+>
+> | 触发 | 场景 | 实现 |
+> |---|---|---|
+> | **唯一的生效触发（按轮次滑出）** | 连续对话，每轮都可能丢轮次 | 「有轮次滑出窗口且未被 `covers_through_turn_no` 覆盖」就压 —— 覆盖区间与 L1 窗口**无缝且不重叠** |
+> | token 规则 | 恢复场景 / 单轮超长 | `ContextBudget` 按**字符数**估算（classpath 无 tokenizer，中文约 1 字 ≈ 1 token，是**保守的偏大估计**）—— 它是**预算**不是计费数字。⚠️ **本阶段只做观测**：越线只打一条 WARN，**不触发再压缩** |
+>
+> **为什么 token 规则只做观测而不接成触发器**（落地时的判断，不是偷懒）：
+> 它压的是**已经滑出去的内容**，不是当前窗口 —— 所以"再压一次"**体积并不会变小**，
+> 却会换来一个**每轮都可能触发的 LLM 调用**。那句话本身是对的（"按轮数触发不对，因为一轮长度差异极大"），
+> 只是它描述的痛点在**恢复场景**下才存在；本项目连续滑动的窗口里，**丢轮次**与轮的长度无关，
+> 「按轮次滑出」才是它的直接解药。
+> ⚠️ 于是那条 WARN 频繁出现是在提示**配置不匹配**（`budget-chars` / `trigger-ratio` 与
+> `window-turns` / `max-chars-per-message` 不同源：前一组是按恢复场景定的，比连续滑动场景小），
+> 是**配置提示**而不是故障信号。
+
 ### 6. 三种恢复粒度：成本 vs 复杂度
 
 | 粒度 | 恢复代价 | 实现复杂度 | 适用场景 |
@@ -694,7 +765,7 @@ boolean stillValid(TaskStep s, SessionEnvelope now) {
 |---|---|---|---|
 | **0** ✅ | **L1 消息流水**：`chat_message` 表 + `MemoryAdvisor`（读历史 + 写回） | 无 | 为 RAG-04 #8 的**指代消解**备好上文（历史进 `context`，**改写层尚未消费**）；可讲"为什么不用 `MessageChatMemoryAdvisor`"（§一）。**已实现**，见 RAG-06 §八 |
 | **1** ✅ | **L1 权限继承**：`chat_message.clearance_level` + 读取过滤 + `MemoryWriteGuard`（只算严、不丢行） | 阶段 0 | **本项目最强差异化**（§三）。通用记忆方案全都没有权限概念，这段抄不到。**已实现**，见 RAG-06 §九 |
-| **2** | **L2 语义记忆**：`user_memory` + 写入管线（复述/推测判定）+ TTL + supersede + **`memory_change_log`** | 阶段 1 | 与 `DocumentVersionResolver` 抽象合并（§四），"制度版本 vs 记忆版本"同一套观 |
+| **2** ✅ | **L2 语义记忆**：`user_memory` + 写入管线（复述/推测判定）+ TTL + supersede + **`memory_change_log`** | 阶段 1 | 与 `DocumentVersionResolver` 抽象合并（§四），"制度版本 vs 记忆版本"同一套观。**已实现**，见 RAG-06 §十；交付物按实际收敛为**跨会话事实**这一层（不含可查/可删接口与巡检，均归阶段 4） |
 | **3a** | **入库断点续传**：内容哈希跳过 + 文件级进度表 | 无 | **改动最小、收益可量化**（省重复 embedding 的钱）。`IngestManifestLoader` 扩成 checkpoint（§五 场景 3） |
 | **3b** | **步级断点续传**：`rag_task_run` / `rag_task_step` + 恢复点算法 | 阶段 3a | §五 §5.3 的算法；"权限变了检索结果就作废"这一条通用框架没有 |
 | **4** | **坏记忆巡检 + 记忆管理接口** | 阶段 2 | 引用已废止制度的记忆自动失效（§四 巡检①）；可查可删是合规项 |
@@ -709,7 +780,7 @@ PermissionAdvisor        ← 必须最先：其余 advisor 都要读它产出的
             └→ NumericGuardrailAdvisor   ← 现有，最内层
 ```
 
-**已核实的现有值**（读源码确认，order 语义见 RAG-06 §十）：
+**已核实的现有值**（读源码确认，order 语义见 RAG-06 §十二）：
 
 | Advisor | `getOrder()` |
 |---|---|
@@ -796,6 +867,19 @@ PermissionAdvisor        ← 必须最先：其余 advisor 都要读它产出的
 ## 附录 A · DDL 草案
 
 > **草案，不是最终 DDL。** 落库前需要和 `sql/rag_assistant_session.sql` 对齐命名风格，并确认 MySQL 版本的 JSON / 生成列支持。风格沿用现有会话表：中文列注释 + 显式写明"为什么删/为什么不存"。
+>
+> **落地状态（2026-09-26）**：
+>
+> | 附录 | 落地版 | 状态 |
+> |---|---|---|
+> | A.1 `chat_message` | `sql/chat_message.sql` | ✅ 阶段 0/1 |
+> | A.2 `user_memory` | `sql/user_memory.sql` | ✅ 阶段 2（4 处偏离，见该节） |
+> | A.3 `memory_change_log` | `sql/memory_change_log.sql` | ✅ 阶段 2（4 处偏离，见该节） |
+> | A.4 `session_summary` | `sql/session_summary.sql` | ✅ §5.5（**本附录首写**：原文只有散文、没有 DDL） |
+> | A.5 `rag_task_run` / `rag_task_step` | —— | ⏳ 阶段 3b，仍是草案 |
+>
+> ⚠️ 各 DDL 文件头都写明：**Windows 的 `mysql` CLI 要用 `--default-character-set=utf8mb4`**，
+> 否则中文注释会按 GBK 存成乱码（表照样建得出来，`SHOW CREATE TABLE` 才发现）。
 
 ### A.1 `chat_message` —— L1 情景记忆
 
@@ -897,6 +981,24 @@ CREATE TABLE IF NOT EXISTS `user_memory` (
   COMMENT = '银行内部RAG助手-语义记忆(蒸馏事实, 带密级继承与双时态)';
 ```
 
+> ### ✅ 已落地（2026-09-26）—— 落地版是 `sql/user_memory.sql`，四处偏离
+>
+> | # | 偏离 | 为什么**必须**这么改 |
+> |---|---|---|
+> | 1 | 新增 **`fact_uid CHAR(36)`** 业务键 + `uk_fact_uid`；`superseded_by` 由 `BIGINT`（指向新记忆的 **id**）改成 `CHAR(36)`（指向后继的 **fact_uid**） | 上面那行 `superseded_by` 按原文**实现不了**：本项目有一条写死的约定——**物理主键不进 record**（`ChatMessageDao.insertTurn` 的注释：「与会话表一致，物理主键 `id` 不进 record，业务主键是 `session_id + turn_no`」），而 record 不可变 ⇒ **插入前拿不到生成键**。先例：`Document.getId()` 用 `nameUUIDFromBytes` 派生确定性 UUID。附带好处：supersede / 续期全部按业务键定位，不依赖物理 id |
+> | 2 | 新增**生成列 `active_key`** + `UNIQUE KEY uk_owner_active (owner_id, scope, active_key)` | 把「同一 `(owner, scope, fact_key)` 至多一条有效行」**从 Java 层不变量落到 DB 层**。⚠️ 唯一索引对 NULL **不生效**（多个 NULL 互不相等），所以必须先用生成列把「有效」压成非 NULL 值才约束得住。收益：阶段 4 巡检② 从「报警」降级成「不该发生」 |
+> | 3 | `fact_key` 存 **ASCII code**（`business_line`）而不是中文标签（`业务条线`） | 中文标签活在**提示词**里，一旦有人把「关注条线」改成「业务条线」，旧行立刻变孤儿，而 supersede 会**静默失效**（不报错，只是永远替代不上）。ASCII code 把「稳定标识」与「展示文本」解耦，展示文本由 `FactKey.label()` 提供（词表唯一真相源） |
+> | 4 | `confidence` 本阶段**不参与任何判定**（只留痕供人工复核排序） | 模型自报的置信度**不是校准信号**，拿它当门禁是**装饰性的安全性** |
+>
+> 另外两处**照原文执行**、但值得指出它们是"闸门"而不是"字段"：
+> `source_session_id` / `source_turn_no` 的 **`NOT NULL`** 就是「**无源不写**」的 DB 兜底；
+> `clearance_level` 的 **`DEFAULT 5`** 与 `chat_message` 同一个理由（迁移回填 + 漏写 fail-closed）。
+>
+> ⚠️ **执行方式**（踩过的坑，写进了 DDL 文件头）：Windows 的 `mysql` CLI 默认
+> `character_set_client=gbk`，直接 `< sql/user_memory.sql` 会把 UTF-8 中文注释存成乱码
+> —— **表照样建得出来**，但 `SHOW CREATE TABLE` 里注释全是乱码，而本项目的 DDL 头注释
+> 正是设计文档的一部分。必须 `mysql -u root --default-character-set=utf8mb4 < ...`。
+
 ### A.3 `memory_change_log` —— 坏记忆审计
 
 ```sql
@@ -924,7 +1026,81 @@ CREATE TABLE IF NOT EXISTS `memory_change_log` (
   COMMENT = '银行内部RAG助手-记忆变更审计(append-only + 哈希链)';
 ```
 
-### A.4 `rag_task_run` / `rag_task_step` —— 断点续传
+> ### ✅ 已落地（2026-09-26）—— 落地版是 `sql/memory_change_log.sql`，四处偏离
+>
+> | # | 偏离 | 为什么 |
+> |---|---|---|
+> | 1 | `memory_id BIGINT NOT NULL` → **`fact_uid CHAR(36) DEFAULT NULL`** | 同上表：物理主键不进 record，插入前拿不到。改 `DEFAULT NULL` 是因为 **`GUARD_REJECT`（内容红线拒绝）没有记忆条目**，只能为 NULL |
+> | 2 | **新增 `entity_type`**（`FACT` / `SUMMARY`） | 摘要的写入/取代也进这张表（§5.5）。**一张审计表带判别列，好过两张几乎相同的表** —— 也让 RAG-04 #13 将来能直接复用。落地的枚举是 `MemoryEntityType`，`payload()` 里**包含** `entity_type`（这一条是相对本文的**修正**：漏了它，两个实体的同 uid 行会哈希相同） |
+> | 3 | 哈希链由 **`org.agent.audit.AuditHashChain`** 提供（不在 DAO 里内联） | #13 要复用它，所以刻意不依赖记忆模块。四个坑（分隔符 / 不含 `id` / `createdAt` 由 Java 传 / **JSON 规范化后哈希**）见 RAG-06 §十 |
+> | 4 | `action` 本阶段只用 **`WRITE` / `SUPERSEDE` / `GUARD_REJECT`** 三个 | `EXPIRE` / `STALE` / `USER_DELETE` 属阶段 4（没有 sweeper 与管理接口，产生不了这些动作）。⚠️ 且 **`GUARD_REJECT` 只记内容红线那一种**：`NOT_GROUNDED` / `TIER_CONFIRM` 是例行质量过滤且**没有记忆条目**，写进去只会把审计表灌满「从未存在过的记忆」 |
+>
+> **落地的两条自律**（本文没写，实现时定的）：
+> ① **`GUARD_REJECT` 的 `after_json` 只放 `{factKey, pattern, valueLength}`，绝不回写被拒的值** ——
+> 否则等于把凭证又抄一遍，**审计本身成了泄露面**；
+> ② 每次追加后把 **head hash 打一条 INFO 日志** —— 链只在库内串行化、有写权限者可整条重写，
+> 所以它只能 **tamper-evident（可发现）**、不是 **tamper-proof（防篡改）**；
+> 这条日志等于一个**外部锚点**，是低成本补偿。
+
+### A.4 `session_summary` —— 会话摘要/压缩（**本文原来只有散文，本附录首写**）
+
+> §5.5 只描述了「恢复给模型的上下文 = 会话摘要 + 最近 N 轮原话」，
+> 没有给 DDL —— 因为它当时被归在阶段 3b。阶段 2 顺手把它做了（它和 L2 共用双时态与审计那一套），
+> 所以补在这里。落地版是 `sql/session_summary.sql`。
+
+```sql
+CREATE TABLE IF NOT EXISTS `session_summary` (
+    `id`                    BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '物理主键(不进 record)',
+    `summary_uid`           CHAR(36)        NOT NULL COMMENT '业务键(Java 生成 UUID)',
+    `session_id`            CHAR(36)        NOT NULL COMMENT '所属会话(读取窗口的第一道条件)',
+    `user_id`               VARCHAR(32)     NOT NULL COMMENT '归属人工号(归属复核用)',
+
+    -- 覆盖区间 [covers_from_turn_no, covers_through_turn_no)：左闭右开，through = 被折叠的最后一轮 + 1
+    -- ⇒ 与 L1 窗口**无缝且不重叠**："每一轮要么在窗口里、要么在摘要里、要么被密级过滤掉"
+    `covers_from_turn_no`   INT UNSIGNED    NOT NULL DEFAULT 1 COMMENT '覆盖起始轮次(含)',
+    `covers_through_turn_no` INT UNSIGNED   NOT NULL COMMENT '已摘要到第几轮(**不含**该轮)',
+    `summary_text`          VARCHAR(2000)   NOT NULL COMMENT '摘要正文：**只含定位信息**，禁止出现金额/比例/期限',
+    `source_turn_count`     INT UNSIGNED    NOT NULL COMMENT '本次折叠了几轮(审计用; 也是"摘要膨胀"的观察指标)',
+
+    -- ⚠️ 摘要**必须**继承密级：一份摘要顶好几轮，不继承的话它是一条比 L1 旁路更宽的路(§三)
+    -- = max(被摘要轮次的 clearance_level)，由 Java 算，**模型无权输出**
+    -- DEFAULT 5(最高密级) 与 chat_message / user_memory 同一套理由
+    `clearance_level`       TINYINT UNSIGNED NOT NULL DEFAULT 5 COMMENT '被摘要轮次的最高密级(整份摘要按此过滤)',
+
+    -- 版本化(append-only + supersede)，**不原地更新**：
+    -- L0"不落库"的代价原文是"无法事后复现当时模型看到了什么"，而摘要正是被注入模型的东西。
+    -- 第 5 轮"读 v1 注入"与"压出 v2 取代 v1"发生在同一轮、先读后写 —— 版本化才保得住可复现。
+    `valid_from`            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `valid_to`              DATETIME        DEFAULT NULL COMMENT '何时不再为真(NULL = 当前有效)',
+    `superseded_by`         CHAR(36)        DEFAULT NULL COMMENT '被哪一版新摘要取代',
+
+    `perm_auth_version`     BIGINT          NOT NULL DEFAULT 0 COMMENT '仅审计, 不参与判定',
+    `expires_at`            DATETIME        DEFAULT NULL COMMENT '留存到期(与 chat_message 同一个 retention-days 口径)',
+    `created_at`            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `updated_at`            DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    -- 与 user_memory.active_key 同一手法：唯一索引对 NULL 不生效，故压成非 NULL 才能约束
+    `active_session_id`     CHAR(36) GENERATED ALWAYS AS (IF(`valid_to` IS NULL, `session_id`, NULL)) VIRTUAL
+        COMMENT '仅用于唯一约束: 有效行=session_id, 历史行=NULL',
+
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_summary_uid` (`summary_uid`),
+    UNIQUE KEY `uk_session_active` (`active_session_id`),   -- 一个会话至多一版有效摘要
+    KEY `idx_user` (`user_id`, `created_at`)
+) ENGINE = InnoDB DEFAULT CHARSET = utf8mb4 COLLATE = utf8mb4_0900_ai_ci
+  COMMENT = '银行内部RAG助手-会话摘要(滑出窗口的定位块, 带密级继承与版本化)';
+```
+
+**两处与 §5.5 的偏离**（都在 RAG-06 §十一 展开）：
+
+1. **触发**：主触发是「按轮次滑出窗口」，不是本文写的 token 规则（token 规则降为次触发）。
+   理由见 §5.5 里补的那段。
+2. **「只做定位」必须机械化**，不能只写在提示词里：`NumericExtractor.extract(summaryText)`
+   **必须为空**，违规**整份丢弃**（不是截断、不是抹掉数字）。且这道终审落在
+   **`SessionSummaryService`（策略层）**，不是 `LlmSummaryWriter` —— 否则它只是**某个实现的属性**，
+   打桩就失效了。
+
+### A.5 `rag_task_run` / `rag_task_step` —— 断点续传（**未落地**，仍是阶段 3b 的方案）
 
 ```sql
 CREATE TABLE IF NOT EXISTS `rag_task_run` (
@@ -1151,8 +1327,9 @@ CREATE TABLE IF NOT EXISTS `rag_task_step` (
 | §二 L4 | RAG-06 §五（版本管理）、RAG-06 §六（检索质量） | 不动，只说明它不是"记忆" |
 | §三 权限继承 | `SessionAuthService.buildAccessFilter()`（`:142`）、`PermissionAdvisor`（context 键） | **复用**，不新写 |
 | §四 巡检① | `DocumentVersionResolver`（RAG-06 §五） | **复用**版本表 |
-| §四 审计哈希链 | RAG-04 #13「审计表 + 哈希链」 | **复用**同一机制 |
+| §四 审计哈希链 | RAG-04 #13「审计表 + 哈希链」 | **已复用并落地**：`org.agent.audit.AuditHashChain` 建在通用包里，**#13 只差消费方**（见 RAG-06 §十） |
 | §五 场景 3 入库断点 | `RagDocumentIngestService`、`IngestManifestLoader`（现为纯解析器，无进度） | 扩成 checkpoint |
-| §六 阶段 0 | RAG-04 #8 剩余项「指代消解」 | **备好前置**：历史进 `context`；改写层消费它才算是解锁该待做项 |
+| §六 阶段 0 | RAG-04 #8 剩余项「指代消解」 | **备好前置**：历史进 `context`；改写层消费它才算是解锁该待做项。§5.5 的摘要又给它添了一条理由（摘要只做到"定位"，"按指针回原文取"要靠 #8） |
+| §六 阶段 2 / §5.5 摘要 | RAG-06 §十 / §十一 | 已实现，实现完的章节按本文头部规则迁去 06 |
 | §五 幂等 | RAG-04 #12「高风险话题人工复核状态机」 | **必须一起设计**（重复派单） |
 

@@ -22,7 +22,12 @@ import javax.sql.DataSource;
  * <p>
  * 注意：
  * <ul>
- *   <li>PG 是独立于 MySQL 会话库的第二个数据源（vectorstore.datasource.*）</li>
+ *   <li><b>PG 是第二个数据源，但**不许**当主角</b> —— 业务库（MySQL）由
+ *       {@link org.agent.config.DataSourceConfig} 显式声明并标 {@code @Primary}。
+ *       这里的 {@code ragVectorDataSource} 一旦成为全上下文唯一的 {@code DataSource}，
+ *       {@code DataSourceAutoConfiguration} 会整体退让 ⇒ MyBatis/事务管理器全绑到 PG，
+ *       业务表被写进向量库，且**启动日志里一行异常都没有**（真实踩过，见 PROBE 探针记录）。
+ *       所以本类的消费方必须显式 {@code @Qualifier("ragVectorDataSource")}，别靠类型注入</li>
  *   <li>需要先有一个 EmbeddingModel bean（此处用 OpenAI 兼容的 SiliconFlow embedding）</li>
  *   <li>embedding 涉及文档原文编码，生产环境须评估数据出境合规；测试环境可直接用云端 API</li>
  * </ul>
@@ -68,10 +73,17 @@ public class RagVectorStoreConfig {
         return new OpenAiEmbeddingModel(api, MetadataMode.EMBED, options);
     }
 
+    /**
+     * ⚠️ {@code @Qualifier("ragVectorDataSource")} 是**必须的**，不是风格问题：
+     * 业务库那个 bean 标了 {@code @Primary}，而 Spring 解析依赖的顺序是
+     * 「先按类型 + {@code @Primary} 定候选人，找不到才退回按参数名匹配」——
+     * 少了这个限定符，这里会被注入**业务库**，向量会被写进 MySQL。
+     * 这类走错的装配不会报错，只会安静地读写错库，所以宁愿写死一个名字。
+     */
     @Bean
     public VectorStore ragVectorStore(@Qualifier("ragEmbeddingModel") EmbeddingModel embeddingModel,
                                       @Value("${rag.vectorstore.dimensions:1536}") int dimensions,
-                                      DataSource ragVectorDataSource) {
+                                      @Qualifier("ragVectorDataSource") DataSource ragVectorDataSource) {
         // 表名默认 vector_store，可另用 schemaName/tableName 定制（当前版本 builder 未暴露 tableName）
         return PgVectorStore.builder(new JdbcTemplate(ragVectorDataSource), embeddingModel)
                 .dimensions(dimensions)
